@@ -2,7 +2,7 @@
  * AI Service for interacting with the local Ollama instance via server proxy
  */
 
-export type AIAssistantAction = 'improve' | 'fix-grammar' | 'shorten' | 'expand' | 'tone-professional' | 'tone-casual' | 'tone-creative' | 'generate-outline' | 'expand-outline' | 'summarize' | 'suggest-title';
+export type AIAssistantAction = 'improve' | 'fix-grammar' | 'shorten' | 'expand' | 'generate-outline' | 'expand-outline' | 'summarize' | 'suggest-title';
 
 const callAiProxy = async (prompt: string, system?: string): Promise<string> => {
   const response = await fetch('/api/ai/generate', {
@@ -50,18 +50,6 @@ export const processAIAction = async (text: string, action: AIAssistantAction, p
     case 'expand':
       systemInstruction += "Expand on the following text with relevant details and richer language.";
       prompt = `Expand on this text:\n\n${text}`;
-      break;
-    case 'tone-professional':
-      systemInstruction += "Rewrite the following text in a professional, formal tone suitable for business communication.";
-      prompt = `Make this professional:\n\n${text}`;
-      break;
-    case 'tone-casual':
-      systemInstruction += "Rewrite the following text in a casual, friendly, and conversational tone.";
-      prompt = `Make this casual:\n\n${text}`;
-      break;
-    case 'tone-creative':
-      systemInstruction += "Rewrite the following text in a creative and engaging tone.";
-      prompt = `Make this creative:\n\n${text}`;
       break;
     case 'generate-outline':
       systemInstruction += "Generate a clear, high-level structural outline for the following text. Use Markdown headings and bullet points.";

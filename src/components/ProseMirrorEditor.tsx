@@ -1,6 +1,6 @@
 import { useEffect, useRef, useImperativeHandle, forwardRef, useState } from 'react';
 import { EditorState, Plugin } from 'prosemirror-state';
-import { EditorView } from 'prosemirror-view';
+import { EditorView, Decoration, DecorationSet } from 'prosemirror-view';
 import { Schema, DOMParser, DOMSerializer, Slice } from 'prosemirror-model';
 import { schema as baseSchema } from 'prosemirror-markdown';
 import { keymap } from 'prosemirror-keymap';
@@ -23,11 +23,14 @@ import {
   ArrowRight, 
   Image as ImageIcon,
   Heading,
+  Heading1,
+  Heading2,
+  Heading3,
   Minimize2,
   Maximize2,
-  Smile,
-  User,
-  Zap
+  Zap,
+  Layout,
+  FileText
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
@@ -120,6 +123,13 @@ interface Props {
   isTypewriter?: boolean;
   direction?: 'ltr' | 'rtl';
   aiPersonalInstructions?: string;
+  searchQuery?: string;
+  searchOptions?: {
+    isCaseSensitive: boolean;
+    isWholeWord: boolean;
+    searchIndex: number;
+    currentMatchIndex: number;
+  };
 }
 
 export interface EditorRef {
@@ -130,9 +140,21 @@ export interface EditorRef {
   replaceSelectionWithMarkdown: (markdown: string) => void;
   getSelectedText: () => string;
   getHtml: () => string;
+  handleFormat: (type: string) => void;
 }
 
-const ProseMirrorEditor = forwardRef<EditorRef, Props>(({ value, onChange, onKeyDown, className, placeholder, isTypewriter, direction = 'ltr', aiPersonalInstructions }, ref) => {
+const ProseMirrorEditor = forwardRef<EditorRef, Props>(({ 
+  value, 
+  onChange, 
+  onKeyDown, 
+  className, 
+  placeholder, 
+  isTypewriter, 
+  direction = 'ltr', 
+  aiPersonalInstructions,
+  searchQuery = '',
+  searchOptions = { isCaseSensitive: false, isWholeWord: false, searchIndex: -1, currentMatchIndex: 0 }
+}, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -174,6 +196,69 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({ value, onChange, onKey
       }
     });
 
+    // Search highlighting plugin
+    const searchPlugin = new Plugin({
+      state: {
+        init() { return DecorationSet.empty; },
+        apply(tr, old, oldState, newState) {
+          const query = tr.getMeta("searchQuery");
+          const options = tr.getMeta("searchOptions");
+          
+          // Only re-calculate if the query, options, or document changed
+          if (query === undefined && options === undefined && !tr.docChanged) {
+            return old.map(tr.mapping, tr.doc);
+          }
+
+          // We need to keep track of the current query and options if we didn't receive them in this meta
+          const currentQuery = query !== undefined ? query : tr.getMeta("prevSearchQuery");
+          const currentOptions = options !== undefined ? options : tr.getMeta("prevSearchOptions");
+
+          if (!currentQuery) return DecorationSet.empty;
+
+          const flags = currentOptions?.isCaseSensitive ? 'g' : 'gi';
+          let pattern = currentQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          if (currentOptions?.isWholeWord) pattern = `\\b${pattern}\\b`;
+
+          const decorations: Decoration[] = [];
+          let globalMatchCount = 0;
+          
+          try {
+            newState.doc.descendants((node, pos) => {
+              if (node.isText) {
+                const nodeText = node.text || "";
+                let m;
+                const r = new RegExp(pattern, flags);
+                while ((m = r.exec(nodeText)) !== null) {
+                  globalMatchCount++;
+                  const start = pos + m.index;
+                  const end = start + m[0].length;
+                  
+                  // Use the global counter to match currentMatchIndex from App.tsx
+                  const isCurrent = currentOptions?.currentMatchIndex !== 0 && globalMatchCount === currentOptions?.currentMatchIndex;
+
+                  decorations.push(Decoration.inline(start, end, {
+                    class: cn(
+                      "transition-all duration-300 rounded-[2px] px-[1.5px] -mx-[1.5px]",
+                      isCurrent 
+                        ? "bg-minimal-accent text-white shadow-[0_0_15px_rgba(var(--minimal-accent-rgb),0.8)] ring-2 ring-minimal-accent z-10 scale-[1.05] inline-block" 
+                        : "bg-minimal-accent/20 border-b-2 border-minimal-accent/40"
+                    )
+                  }));
+                }
+              }
+            });
+          } catch (e) {}
+
+          return DecorationSet.create(newState.doc, decorations);
+        }
+      },
+      props: {
+        decorations(state) {
+          return this.getState(state);
+        }
+      }
+    });
+
     const state = EditorState.create({
       doc: defaultMarkdownParser.parse(value),
       plugins: [
@@ -188,6 +273,7 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({ value, onChange, onKey
         buildInputRules(baseSchema),
         highlightPlugin,
         typewriterPlugin,
+        searchPlugin,
         new Plugin({
           view() {
             return {
@@ -269,9 +355,25 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({ value, onChange, onKey
     }
   }, [value]);
 
-  // Sync direction
+  // Sync search state
+  const prevSearchQuery = useRef('');
+  const prevSearchOptions = useRef<any>(null);
+
   useEffect(() => {
     if (viewRef.current) {
+      const tr = viewRef.current.state.tr;
+      tr.setMeta("searchQuery", searchQuery);
+      tr.setMeta("searchOptions", searchOptions);
+      // Store them for the 'apply' logic to use when tr.docChanged
+      tr.setMeta("prevSearchQuery", searchQuery);
+      tr.setMeta("prevSearchOptions", searchOptions);
+      
+      viewRef.current.dispatch(tr);
+      
+      prevSearchQuery.current = searchQuery;
+      prevSearchOptions.current = searchOptions;
+
+      // Restore view attributes (direction, etc)
       viewRef.current.setProps({
         attributes: {
           class: cn("ProseMirror", isTypewriter && "typewriter-mode"),
@@ -279,8 +381,32 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({ value, onChange, onKey
           dir: direction,
         }
       });
+
+      // If we have a current match, try to scroll to it
+      // Note: mapping searchIndex (string index) to PM pos is approximate
+      // but for basic markdown it's usually 1:1 or very close.
+      if (searchQuery && searchOptions.searchIndex !== -1) {
+        // We'll try to find the PM position that matches the searchIndex
+        // For simplicity, we'll just scroll the view if we can find the decoration pos
+        // Or just use coordsAtPos if we assume 1:1 mapping for now.
+        try {
+          const pos = searchOptions.searchIndex; // Naive approximation
+          const coords = viewRef.current.coordsAtPos(pos);
+          if (coords) {
+             const editorRect = editorRef.current?.getBoundingClientRect();
+             const scrollContainer = editorRef.current?.parentElement;
+             if (scrollContainer && editorRect) {
+               const relativeTop = coords.top - editorRect.top + scrollContainer.scrollTop;
+               scrollContainer.scrollTo({
+                 top: relativeTop - scrollContainer.clientHeight / 3,
+                 behavior: 'smooth'
+               });
+             }
+          }
+        } catch (e) {}
+      }
     }
-  }, [direction, isTypewriter, placeholder]);
+  }, [searchQuery, searchOptions.searchIndex, searchOptions.currentMatchIndex, searchOptions.isCaseSensitive, searchOptions.isWholeWord, direction, isTypewriter, placeholder]);
 
   useImperativeHandle(ref, () => ({
     focus: () => {
@@ -336,6 +462,9 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({ value, onChange, onKey
       const container = document.createElement('div');
       container.appendChild(fragment);
       return container.innerHTML;
+    },
+    handleFormat: (type: string) => {
+      handleFormat(type);
     }
   }));
 
@@ -346,6 +475,9 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({ value, onChange, onKey
     if (type === 'bold') toggleMark(baseSchema.marks.strong)(state, dispatch);
     if (type === 'italic') toggleMark(baseSchema.marks.em)(state, dispatch);
     if (type === 'code') toggleMark(baseSchema.marks.code)(state, dispatch);
+    if (type === 'h1') setBlockType(baseSchema.nodes.heading, { level: 1 })(state, dispatch);
+    if (type === 'h2') setBlockType(baseSchema.nodes.heading, { level: 2 })(state, dispatch);
+    if (type === 'h3') setBlockType(baseSchema.nodes.heading, { level: 3 })(state, dispatch);
     if (type === 'quote') wrapInBlock(baseSchema.nodes.blockquote)(state, dispatch);
     
     viewRef.current.focus();
@@ -397,6 +529,28 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({ value, onChange, onKey
             }}
             className="z-[100] flex items-center gap-1 bg-zinc-900 border border-zinc-700/50 rounded-lg p-1 shadow-2xl backdrop-blur"
           >
+            <button
+              onClick={() => handleFormat('h1')}
+              className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
+              title="Heading 1"
+            >
+              <Heading1 className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => handleFormat('h2')}
+              className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
+              title="Heading 2"
+            >
+              <Heading2 className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => handleFormat('h3')}
+              className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
+              title="Heading 3"
+            >
+              <Heading3 className="w-3.5 h-3.5" />
+            </button>
+            <div className="w-px h-3 bg-white/20 mx-0.5" />
             <button
               onClick={() => handleFormat('bold')}
               className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
@@ -499,12 +653,11 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({ value, onChange, onKey
                         </button>
                       ))}
 
-                      <div className="px-2 py-1.5 text-[9px] font-bold text-zinc-500 uppercase tracking-widest bg-zinc-800/50 mt-1 mb-1">Tone & Structure</div>
+                      <div className="px-2 py-1.5 text-[9px] font-bold text-zinc-500 uppercase tracking-widest bg-zinc-800/50 mt-1 mb-1">Structure</div>
                       {[
-                        { id: 'tone-professional', label: 'Formal Tone', icon: User },
-                        { id: 'tone-casual', label: 'Casual Tone', icon: Smile },
-                        { id: 'summarize', label: 'Summarize', icon: AlignLeft },
+                        { id: 'generate-outline', label: 'Create Outline', icon: Layout },
                         { id: 'expand-outline', label: 'Draft from Outline', icon: Zap },
+                        { id: 'summarize', label: 'Summarize', icon: FileText },
                         { id: 'suggest-title', label: 'Suggest Titles', icon: Heading },
                       ].map(item => (
                         <button

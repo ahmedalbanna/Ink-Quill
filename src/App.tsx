@@ -11,31 +11,28 @@ import {
   ListOrdered, 
   Quote, 
   Code, 
-  Download, 
   Trash2,
-  FileText,
-  ChevronDown,
   X,
   Search,
   ArrowRightLeft,
+  ChevronDown,
   Maximize2 as FocusOn,
   Minimize2 as FocusOff,
   Clock,
   Target,
   Type,
-  Palette,
   Check,
   Sparkles,
   Send,
   Languages,
   Menu,
-  History,
-  FileDown,
   Image as ImageIcon,
+  Heading1,
+  Heading2,
+  Heading3,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
-import { TEMPLATES, THEMES, FONTS, type Template, type AppTheme, type AppFont } from './constants';
 import ProseMirrorEditor, { EditorRef } from './components/ProseMirrorEditor';
 import { generateContentFromPrompt, processAIAction } from './services/aiService';
 
@@ -72,46 +69,11 @@ function hello() {
 Enjoy your writing journey!
 `;
 
-interface Version {
-  id: string;
-  timestamp: string;
-  content: string;
-  wordCount: number;
-}
-
 export default function App() {
   const [markdown, setMarkdown] = useState<string>(() => {
     const saved = localStorage.getItem('ink-quill-doc');
     return saved !== null ? saved : DEFAULT_MARKDOWN;
   });
-  const [activeTheme, setActiveTheme] = useState<AppTheme>(() => {
-    const saved = localStorage.getItem('ink-quill-theme');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        // Find if it's a predefined theme or custom
-        const found = THEMES.find(t => t.id === parsed.id);
-        return found || parsed;
-      } catch (e) {
-        return THEMES[0];
-      }
-    }
-    return THEMES[0];
-  });
-  const [activeFont, setActiveFont] = useState<AppFont>(() => {
-    const saved = localStorage.getItem('ink-quill-font');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        return FONTS.find(f => f.id === parsed.id) || FONTS[0];
-      } catch (e) {
-        return FONTS[0];
-      }
-    }
-    return FONTS[0];
-  });
-  const [showTemplates, setShowTemplates] = useState(false);
-  const [showThemes, setShowThemes] = useState(false);
   const [showAiAssistant, setShowAiAssistant] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
@@ -120,10 +82,13 @@ export default function App() {
   const [replaceText, setReplaceText] = useState('');
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [searchIndex, setSearchIndex] = useState(-1);
+  const [matchCount, setMatchCount] = useState(0);
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [isCaseSensitive, setIsCaseSensitive] = useState(false);
   const [isWholeWord, setIsWholeWord] = useState(false);
-  const [isFocusMode, setIsFocusMode] = useState(false);
+  const [isFocusMode, setIsFocusMode] = useState(true);
   const [isTypewriterMode, setIsTypewriterMode] = useState(false);
+  const [isSuperZen, setIsSuperZen] = useState(false);
   const [direction, setDirection] = useState<'ltr' | 'rtl'>(() => {
     return (localStorage.getItem('ink-quill-dir') as 'ltr' | 'rtl') || 'ltr';
   });
@@ -134,12 +99,6 @@ export default function App() {
     const saved = localStorage.getItem('ink-quill-goal');
     return saved ? parseInt(saved) : 0;
   });
-  const [history, setHistory] = useState<Version[]>(() => {
-    const saved = localStorage.getItem('ink-quill-history');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [showHistory, setShowHistory] = useState(false);
-  const [showExport, setShowExport] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const editorRef = useRef<EditorRef>(null);
 
@@ -148,19 +107,8 @@ export default function App() {
   }, [markdown]);
 
   useEffect(() => {
-    localStorage.setItem('ink-quill-history', JSON.stringify(history));
-  }, [history]);
-
-  // Auto-save checkpoints every 5 minutes if content changed
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const lastVersion = history[0];
-      if (!lastVersion || lastVersion.content !== markdown) {
-        saveVersion();
-      }
-    }, 5 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [markdown, history]);
+    localStorage.setItem('ink-quill-history', JSON.stringify([]));
+  }, []);
 
   useEffect(() => {
     if (wordGoal > 0) {
@@ -179,22 +127,16 @@ export default function App() {
   }, [aiPersonalInstructions]);
 
   useEffect(() => {
-    localStorage.setItem('ink-quill-theme', JSON.stringify(activeTheme));
-    
-    // Apply theme colors to CSS variables
+    // Apply standard brand colors and font to CSS variables
     const root = document.documentElement;
-    root.style.setProperty('--minimal-bg', activeTheme.colors.bg);
-    root.style.setProperty('--minimal-sidebar', activeTheme.colors.sidebar);
-    root.style.setProperty('--minimal-border', activeTheme.colors.border);
-    root.style.setProperty('--minimal-text', activeTheme.colors.text);
-    root.style.setProperty('--minimal-muted', activeTheme.colors.muted);
-    root.style.setProperty('--minimal-accent', activeTheme.colors.accent);
-  }, [activeTheme]);
-
-  useEffect(() => {
-    localStorage.setItem('ink-quill-font', JSON.stringify(activeFont));
-    document.documentElement.style.setProperty('--minimal-font', activeFont.family);
-  }, [activeFont]);
+    root.style.setProperty('--minimal-bg', '#ffffff');
+    root.style.setProperty('--minimal-sidebar', '#fafafa');
+    root.style.setProperty('--minimal-border', '#e8e8e8');
+    root.style.setProperty('--minimal-text', '#2c3e50');
+    root.style.setProperty('--minimal-muted', '#95a5a6');
+    root.style.setProperty('--minimal-accent', '#3498db');
+    root.style.setProperty('--minimal-font', '"Inter", sans-serif');
+  }, []);
 
   const insertText = (before: string, after: string = '') => {
     if (!editorRef.current) return;
@@ -214,18 +156,60 @@ export default function App() {
         if (!showSearch) {
           setSearchIndex(-1);
         }
+      } else if (e.key === 't' && e.shiftKey) {
+        e.preventDefault();
+        setIsTypewriterMode(prev => !prev);
+      } else if (e.key === 'z' && e.shiftKey) {
+        e.preventDefault();
+        setIsFocusMode(prev => !prev);
       }
     }
   };
 
-  const handleFindNext = () => {
-    if (!findText) return;
-    
+  useEffect(() => {
+    if (!findText) {
+      setMatchCount(0);
+      setCurrentMatchIndex(0);
+      setSearchIndex(-1);
+      return;
+    }
+
     const flags = isCaseSensitive ? 'g' : 'gi';
     let pattern = findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     if (isWholeWord) {
       pattern = `\\b${pattern}\\b`;
     }
+
+    try {
+      const regex = new RegExp(pattern, flags);
+      const matches = [...markdown.matchAll(regex)];
+      setMatchCount(matches.length);
+      
+      // Try to find if our searchIndex is in matches
+      const idx = matches.findIndex(m => m.index === searchIndex);
+      if (idx !== -1) {
+        setCurrentMatchIndex(idx + 1);
+      } else if (matches.length > 0 && searchIndex === -1) {
+        // Just found something for the first time
+        // We don't automatically jump to the first match here to avoid jitter, 
+        // but we show the count.
+        setCurrentMatchIndex(0);
+      } else if (matches.length === 0) {
+        setCurrentMatchIndex(0);
+        setSearchIndex(-1);
+      }
+    } catch (e) {
+      setMatchCount(0);
+      setCurrentMatchIndex(0);
+    }
+  }, [findText, markdown, isCaseSensitive, isWholeWord]);
+
+  const handleFindNext = () => {
+    if (!findText || matchCount === 0) return;
+    
+    const flags = isCaseSensitive ? 'g' : 'gi';
+    let pattern = findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (isWholeWord) pattern = `\\b${pattern}\\b`;
     
     const regex = new RegExp(pattern, flags);
     const startPos = searchIndex === -1 ? 0 : searchIndex + 1;
@@ -240,6 +224,7 @@ export default function App() {
 
     if (result) {
       setSearchIndex(result.index);
+      // currentMatchIndex will be updated by useEffect
     } else {
       setSearchIndex(-1);
     }
@@ -251,136 +236,35 @@ export default function App() {
     if (start !== -1) {
       const newMarkdown = markdown.substring(0, start) + replaceText + markdown.substring(start + findText.length);
       setMarkdown(newMarkdown);
-      setSearchIndex(-1);
+      // We don't clear searchIndex here, handleFindNext or useEffect will handle it
+      // Actually we should probably move to the next one
+      setTimeout(handleFindNext, 0);
     } else {
       handleFindNext();
     }
   };
 
   const handleReplaceAll = () => {
-    if (!findText) return;
-    const flags = isCaseSensitive ? 'g' : 'gi';
-    let pattern = findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (isWholeWord) {
-      pattern = `\\b${pattern}\\b`;
+    if (!findText || matchCount === 0) return;
+    
+    if (window.confirm(`Are you sure you want to replace all ${matchCount} occurrence(s) of "${findText}"?`)) {
+      const flags = isCaseSensitive ? 'g' : 'gi';
+      let pattern = findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (isWholeWord) pattern = `\\b${pattern}\\b`;
+      
+      const regex = new RegExp(pattern, flags);
+      const newMarkdown = markdown.replace(regex, replaceText);
+      setMarkdown(newMarkdown);
+      
+      alert(`Successfully replaced ${matchCount} occurrence(s).`);
+      setSearchIndex(-1);
     }
-    const regex = new RegExp(pattern, flags);
-    const newMarkdown = markdown.replace(regex, replaceText);
-    setMarkdown(newMarkdown);
-  };
-
-  const downloadMarkdown = () => {
-    const element = document.createElement("a");
-    const file = new Blob([markdown], { type: 'text/markdown' });
-    element.href = URL.createObjectURL(file);
-    element.download = "ink-quill-document.md";
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
-    setShowExport(false);
-  };
-
-  const exportToHtml = () => {
-    const htmlContent = editorRef.current?.getHtml() || "";
-    const fullHtml = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <title>Ink & Quill Export</title>
-        <style>
-          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: ${activeTheme.colors.text}; background: ${activeTheme.colors.bg}; padding: 40px; max-width: 800px; margin: 0 auto; }
-          h1, h2, h3 { color: ${activeTheme.colors.text}; }
-          pre { background: #f4f4f4; padding: 15px; border-radius: 5px; overflow-x: auto; }
-          code { font-family: monospace; }
-          blockquote { border-left: 4px solid ${activeTheme.colors.accent}; padding-left: 20px; color: #666; font-style: italic; }
-          img { max-width: 100%; border-radius: 8px; }
-          table { border-collapse: collapse; width: 100%; margin: 20px 0; }
-          th, td { border: 1px solid ${activeTheme.colors.border}; padding: 12px; text-align: left; }
-          th { background: #f8f8f8; }
-        </style>
-      </head>
-      <body>
-        ${htmlContent}
-      </body>
-      </html>
-    `;
-    const element = document.createElement("a");
-    const file = new Blob([fullHtml], { type: 'text/html' });
-    element.href = URL.createObjectURL(file);
-    element.download = "ink-quill-document.html";
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
-    setShowExport(false);
-  };
-
-  const exportToPdf = async () => {
-    const htmlContent = editorRef.current?.getHtml() || "";
-    const container = document.createElement('div');
-    container.innerHTML = htmlContent;
-    container.style.padding = '40px';
-    container.style.color = activeTheme.colors.text;
-    container.classList.add('markdown-body'); // Reuse existing styles if possible or defined globaly
-    
-    // Dynamically import html2pdf if needed or assume installed
-    // @ts-ignore
-    const html2pdf = (await import('html2pdf.js')).default;
-    
-    const opt = {
-      margin: 1,
-      filename: 'ink-quill-document.pdf',
-      image: { type: 'jpeg' as const, quality: 0.98 },
-      html2canvas: { scale: 2 },
-      jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' as const }
-    };
-
-    html2pdf().set(opt).from(container).save();
-    setShowExport(false);
-  };
-
-  const saveVersion = (manual: boolean = false) => {
-    const wordCount = markdown.split(/\s+/).filter(Boolean).length;
-    const newVersion: Version = {
-      id: crypto.randomUUID(),
-      timestamp: new Date().toISOString(),
-      content: markdown,
-      wordCount
-    };
-    
-    setHistory(prev => [newVersion, ...prev].slice(0, 50)); // Keep last 50 versions
-    if (manual) alert("Version snapshot saved successfully.");
-  };
-
-  const revertToVersion = (version: Version) => {
-    if (window.confirm(`Revert to version from ${new Date(version.timestamp).toLocaleString()}? Current unsaved changes will be lost.`)) {
-      setMarkdown(version.content);
-      setShowHistory(false);
-    }
-  };
-
-  const deleteVersion = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setHistory(prev => prev.filter(v => v.id !== id));
   };
 
   const clearEditor = () => {
     if (window.confirm("Are you sure you want to clear your document? This cannot be undone.")) {
       setMarkdown("");
     }
-  };
-
-  const applyTemplate = (template: Template) => {
-    if (markdown.trim() && markdown !== DEFAULT_MARKDOWN) {
-      if (!window.confirm("Applying a template will overwrite your current document. Continue?")) {
-        return;
-      }
-    }
-    setMarkdown(template.content);
-    setShowTemplates(false);
-    
-    // Smooth scroll to top
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleAiGenerate = async () => {
@@ -402,10 +286,13 @@ export default function App() {
   };
 
   const toolbarButtons = [
-    { icon: Bold, label: 'Bold', action: () => insertText('**', '**') },
-    { icon: Italic, label: 'Italic', action: () => insertText('*', '*') },
-    { icon: Code, label: 'Code', action: () => insertText('`', '`') },
-    { icon: Quote, label: 'Quote', action: () => insertText('> ') },
+    { icon: Heading1, label: 'Heading 1', action: () => editorRef.current?.handleFormat('h1') },
+    { icon: Heading2, label: 'Heading 2', action: () => editorRef.current?.handleFormat('h2') },
+    { icon: Heading3, label: 'Heading 3', action: () => editorRef.current?.handleFormat('h3') },
+    { icon: Bold, label: 'Bold', action: () => editorRef.current?.handleFormat('bold') },
+    { icon: Italic, label: 'Italic', action: () => editorRef.current?.handleFormat('italic') },
+    { icon: Code, label: 'Code', action: () => editorRef.current?.handleFormat('code') },
+    { icon: Quote, label: 'Quote', action: () => editorRef.current?.handleFormat('quote') },
     { icon: List, label: 'Unordered List', action: () => insertText('- ') },
     { icon: ListOrdered, label: 'Ordered List', action: () => insertText('1. ') },
     { icon: ImageIcon, label: 'Image', action: () => {
@@ -429,266 +316,7 @@ export default function App() {
         isFocusMode && "overflow-hidden"
       )}
     >
-      {/* Header / Toolbar */}
-      <AnimatePresence>
-        {!isFocusMode && (
-          <motion.header 
-            initial={{ y: -60 }}
-            animate={{ y: 0 }}
-            exit={{ y: -60 }}
-            className="fixed top-0 inset-x-0 h-14 bg-minimal-bg border-b border-minimal-border z-50 px-4 md:px-6 flex items-center justify-between"
-          >
-        <div className="flex items-center gap-2 md:gap-4">
-          <button 
-            onClick={() => setShowMobileMenu(!showMobileMenu)}
-            className="md:hidden p-2 hover:bg-zinc-100 rounded-lg transition-colors"
-          >
-            <Menu className="w-5 h-5 text-minimal-muted" />
-          </button>
-
-          <div className="hidden md:flex items-center gap-1.5 me-2">
-            <button
-              onClick={() => setShowAiAssistant(!showAiAssistant)}
-              className={cn(
-                "flex items-center gap-2 py-1.5 px-3 rounded-lg transition-all border",
-                showAiAssistant 
-                  ? "bg-minimal-accent text-white border-minimal-accent shadow-lg shadow-minimal-accent/20" 
-                  : "bg-minimal-accent/10 text-minimal-accent border-transparent hover:bg-minimal-accent/20"
-              )}
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span className="text-[13px] font-bold">Assistant</span>
-            </button>
-
-            <button
-              onClick={() => setShowHistory(!showHistory)}
-              className={cn(
-                "p-2 rounded-lg transition-colors border border-transparent",
-                showHistory ? "bg-minimal-accent/10 text-minimal-accent border-minimal-accent/20" : "text-minimal-muted hover:bg-zinc-50"
-              )}
-              title="Version History"
-            >
-              <History className="w-4 h-4" />
-            </button>
-
-            <div className="h-4 w-px bg-minimal-border mx-1" />
-
-            {/* Appearance Settings */}
-            <div className="relative">
-              <button
-                onClick={() => setShowThemes(!showThemes)}
-                className={cn(
-                  "p-2 rounded-lg transition-colors border border-transparent hover:bg-zinc-50 font-bold",
-                  showThemes ? "bg-zinc-100 border-minimal-border text-minimal-accent" : "text-minimal-muted"
-                )}
-                title="Themes & Typography"
-              >
-                <Palette className="w-4 h-4" />
-              </button>
-              <AnimatePresence>
-                {showThemes && (
-                  <>
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowThemes(false)} className="fixed inset-0 z-40" />
-                    <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute top-10 left-0 w-64 bg-white border border-minimal-border rounded-xl shadow-2xl z-50 overflow-hidden">
-                      <div className="p-3.5 border-b border-minimal-border bg-zinc-50 flex justify-between items-center text-minimal-muted font-bold tracking-widest text-[9px] uppercase">
-                        <span>Personalization</span>
-                        <X className="w-2.5 h-2.5 cursor-pointer" onClick={() => setShowThemes(false)} />
-                      </div>
-                      <div className="p-1 grid grid-cols-1 gap-0.5 max-h-[250px] overflow-y-auto">
-                        {THEMES.map((theme) => (
-                          <button key={theme.id} onClick={() => { setActiveTheme(theme); localStorage.setItem('ink-quill-theme', JSON.stringify(theme)); }} className={cn("flex items-center justify-between p-2.5 rounded-lg transition-all", activeTheme.id === theme.id ? "bg-minimal-accent/10 text-minimal-accent" : "hover:bg-zinc-50")}>
-                            <div className="flex items-center gap-3"><div className="w-3.5 h-3.5 rounded-full border border-black/5" style={{ backgroundColor: theme.colors.bg }} /><span className="text-xs font-semibold">{theme.name}</span></div>
-                            {activeTheme.id === theme.id && <Check className="w-3 h-3" />}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="p-3.5 border-t border-minimal-border bg-zinc-50 space-y-3">
-                        <span className="text-[9px] font-bold text-minimal-muted uppercase tracking-widest block">Typography</span>
-                        <div className="grid grid-cols-1 gap-0.5">
-                          {FONTS.map(font => (
-                            <button key={font.id} onClick={() => { setActiveFont(font); localStorage.setItem('ink-quill-font', JSON.stringify(font)); }} className={cn("flex items-center justify-between p-2 rounded-lg transition-all", activeFont.id === font.id ? "bg-minimal-accent/10 text-minimal-accent font-bold" : "hover:bg-zinc-50")}>
-                              <span style={{ fontFamily: font.family }} className="text-xs font-medium">{font.name}</span>
-                              {activeFont.id === font.id && <Check className="w-3 h-3" />}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </motion.div>
-                  </>
-                )}
-              </AnimatePresence>
-            </div>
-
-            {/* Templates Popover */}
-            <div className="relative">
-              <button
-                onClick={() => setShowTemplates(!showTemplates)}
-                className={cn(
-                  "p-2 rounded-lg transition-colors border border-transparent hover:bg-zinc-50 font-bold",
-                  showTemplates ? "bg-zinc-100 border-minimal-border text-minimal-accent" : "text-minimal-muted"
-                )}
-                title="Templates"
-              >
-                <FileText className="w-4 h-4" />
-              </button>
-              <AnimatePresence>
-                {showTemplates && (
-                  <>
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowTemplates(false)} className="fixed inset-0 z-40" />
-                    <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute top-10 left-0 w-[300px] bg-white border border-minimal-border rounded-xl shadow-2xl z-50 overflow-hidden">
-                      <div className="p-3.5 border-b border-minimal-border bg-zinc-50 flex justify-between items-center text-minimal-muted font-bold tracking-widest text-[9px] uppercase"><span>Draft Blueprints</span><X className="w-2.5 h-2.5 cursor-pointer" onClick={() => setShowTemplates(false)} /></div>
-                      <div className="p-1 max-h-[350px] overflow-y-auto">
-                        {TEMPLATES.map(tpl => (
-                           <button key={tpl.id} onClick={() => applyTemplate(tpl)} className="w-full flex flex-col items-start p-3 rounded-lg hover:bg-zinc-50 transition-all group text-left">
-                             <span className="text-xs font-bold text-minimal-text group-hover:text-minimal-accent">{tpl.name}</span>
-                             <span className="text-[10px] text-minimal-muted mt-0.5 line-clamp-1">{tpl.description}</span>
-                           </button>
-                        ))}
-                      </div>
-                    </motion.div>
-                  </>
-                )}
-              </AnimatePresence>
-            </div>
-          </div>
-
-          {/* Center: Contextual Info */}
-          <div className="flex-1 flex justify-center min-w-0 px-4">
-            <div className="flex items-center gap-2.5 px-3.5 py-1.5 bg-zinc-50 rounded-full border border-minimal-border max-w-[200px] lg:max-w-none shadow-sm">
-              <span className="text-xs font-bold text-minimal-text truncate tracking-tight">InkQuill_Document.md</span>
-              <div className="h-3 w-px bg-minimal-border hidden sm:block" />
-              <div className="hidden sm:flex items-center gap-1.5">
-                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
-                <span className="text-[10px] text-minimal-muted font-bold uppercase tracking-widest">Live</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Right Section: View & Primary Actions */}
-          <div className="flex items-center gap-1 md:gap-3">
-            {/* Formatting Toolbar - Only visible on wide desktop screens */}
-            <div className="hidden 2xl:flex items-center gap-1 me-2 pr-3 border-e border-minimal-border">
-              {toolbarButtons.map((btn, i) => (
-                <button
-                  key={i}
-                  onClick={btn.action}
-                  className="p-1.5 text-minimal-muted hover:text-minimal-text hover:bg-zinc-50 rounded transition-colors"
-                  title={btn.label}
-                >
-                  <btn.icon className="w-3.5 h-3.5" />
-                </button>
-              ))}
-            </div>
-
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => { setShowSearch(!showSearch); setSearchIndex(-1); }}
-                className={cn(
-                  "p-2 rounded-lg transition-colors border border-transparent",
-                  showSearch ? "bg-minimal-accent/10 text-minimal-accent border-minimal-accent/20" : "text-minimal-muted hover:bg-zinc-50"
-                )}
-                title="Find & Replace"
-              >
-                <Search className="w-4 h-4" />
-              </button>
-
-              {/* View Settings Dropdown */}
-              <div className="relative">
-                <button
-                  onClick={() => setShowSettings(!showSettings)}
-                  className={cn(
-                    "p-2 rounded-lg transition-colors border border-transparent hover:bg-zinc-50 font-bold",
-                    showSettings ? "bg-zinc-100 border-minimal-border text-minimal-accent" : "text-minimal-muted"
-                  )}
-                  title="View & Focus Modes"
-                >
-                  <Type className="w-4 h-4" />
-                </button>
-                <AnimatePresence>
-                  {showSettings && (
-                    <>
-                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowSettings(false)} className="fixed inset-0 z-40" />
-                      <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute top-10 right-0 w-64 bg-white border border-minimal-border rounded-xl shadow-2xl z-50 overflow-hidden">
-                        <div className="p-4 border-b border-minimal-border bg-zinc-50">
-                          <span className="text-[10px] font-bold text-minimal-muted uppercase tracking-widest">Canvas Settings</span>
-                        </div>
-                        <div className="p-2 space-y-1">
-                          <button onClick={() => setIsTypewriterMode(!isTypewriterMode)} className={cn("w-full flex items-center justify-between p-3 rounded-lg transition-colors", isTypewriterMode ? "bg-minimal-accent/5 text-minimal-accent" : "hover:bg-zinc-50")}>
-                            <div className="flex items-center gap-3"><Type className="w-4 h-4" /><div className="text-left font-bold text-xs"><p>Typewriter</p><p className="text-[10px] opacity-60 font-medium italic">Fixed Center Cursor</p></div></div>
-                            {isTypewriterMode && <Check className="w-3 h-3" />}
-                          </button>
-                          <button onClick={() => { setIsFocusMode(true); setShowSettings(false); }} className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-zinc-50 transition-colors">
-                            <FocusOn className="w-4 h-4 text-minimal-muted" /><div className="text-left font-bold text-xs"><p>Zen Mode</p><p className="text-[10px] opacity-60 font-medium italic">Full-screen immersion</p></div>
-                          </button>
-                          <button onClick={() => setDirection(direction === 'ltr' ? 'rtl' : 'ltr')} className="w-full flex items-center justify-between p-3 rounded-lg hover:bg-zinc-50 transition-colors text-xs font-bold">
-                            <div className="flex items-center gap-3"><Languages className="w-4 h-4 text-minimal-muted" /><span>Orientation: {direction.toUpperCase()}</span></div>
-                          </button>
-                          <div className="h-px bg-minimal-border my-2" />
-                          <div className="px-3 pb-3 space-y-3">
-                            <div className="flex items-center justify-between">
-                               <div className="flex items-center gap-2 font-bold text-xs"><Target className={cn("w-4 h-4", wordGoal > 0 ? "text-minimal-accent" : "text-minimal-muted")} /><span>Goal</span></div>
-                               <button onClick={() => { const goal = window.prompt("Set your word count goal:", wordGoal.toString()); if (goal !== null) setWordGoal(parseInt(goal) || 0); }} className="text-[10px] font-bold text-minimal-accent underline">{wordGoal > 0 ? `${wordGoal} words` : "Set"}</button>
-                            </div>
-                            {wordGoal > 0 && <div className="w-full h-1 bg-zinc-200 rounded-full overflow-hidden self-end"><motion.div initial={{ width: 0 }} animate={{ width: `${goalProgress}%` }} className="h-full bg-minimal-accent" /></div>}
-                          </div>
-                        </div>
-                      </motion.div>
-                    </>
-                  )}
-                </AnimatePresence>
-              </div>
-
-              <div className="h-4 w-px bg-minimal-border mx-1" />
-
-              {/* Share & Cleanup Actions */}
-              <div className="flex items-center gap-1">
-                <div className="relative">
-                  <button
-                    onClick={() => setShowExport(!showExport)}
-                    className={cn(
-                      "p-2 rounded-lg transition-colors border border-transparent hover:bg-zinc-50",
-                      showExport ? "bg-zinc-100 border-minimal-border text-minimal-accent" : "text-minimal-muted"
-                    )}
-                    title="Share and Export Document"
-                  >
-                    <FileDown className="w-4 h-4" />
-                  </button>
-                  <AnimatePresence>
-                    {showExport && (
-                      <>
-                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowExport(false)} className="fixed inset-0 z-40" />
-                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="absolute top-10 right-0 w-48 bg-white border border-minimal-border rounded-xl shadow-2xl z-50 overflow-hidden p-1.5 flex flex-col gap-0.5">
-                          <button onClick={downloadMarkdown} className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-zinc-50 transition-colors">
-                            <div className="w-7 h-7 bg-blue-50 text-blue-500 rounded flex items-center justify-center font-bold text-[9px]">MD</div>
-                            <span className="text-xs font-bold">Markdown</span>
-                          </button>
-                          <button onClick={exportToHtml} className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-zinc-50 transition-colors">
-                            <div className="w-7 h-7 bg-orange-50 text-orange-500 rounded flex items-center justify-center font-bold text-[9px]">HTML</div>
-                            <span className="text-xs font-bold">Web Page</span>
-                          </button>
-                          <button onClick={exportToPdf} className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-zinc-50 transition-colors">
-                            <div className="w-7 h-7 bg-red-50 text-red-500 rounded flex items-center justify-center font-bold text-[9px]">PDF</div>
-                            <span className="text-xs font-bold">Portable PDF</span>
-                          </button>
-                        </motion.div>
-                      </>
-                    )}
-                  </AnimatePresence>
-                </div>
-                <button
-                  onClick={clearEditor}
-                  className="p-2 text-minimal-muted hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                  title="Wipe Document"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-          </motion.header>
-        )}
-      </AnimatePresence>
+      {/* Header / Toolbar - Removed as requested */}
 
       {/* Mobile Menu Sidebar */}
       <AnimatePresence>
@@ -723,55 +351,7 @@ export default function App() {
                 </button>
                 
                 <div className="space-y-1">
-                  <p className="px-3 text-[10px] font-bold text-minimal-muted uppercase tracking-wider mb-2">Style</p>
-                  <button
-                    onClick={() => { setShowThemes(true); setShowMobileMenu(false); }}
-                    className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-zinc-100 text-minimal-text transition-colors"
-                  >
-                    <Palette className="w-4 h-4 text-minimal-muted" />
-                    <span className="text-sm font-medium">Themes & Fonts</span>
-                  </button>
-                  <button
-                    onClick={() => { setShowTemplates(true); setShowMobileMenu(false); }}
-                    className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-zinc-100 text-minimal-text transition-colors"
-                  >
-                    <FileText className="w-4 h-4 text-minimal-muted" />
-                    <span className="text-sm font-medium">Templates</span>
-                  </button>
-                  <button
-                    onClick={() => { setShowHistory(true); setShowMobileMenu(false); }}
-                    className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-zinc-100 text-minimal-text transition-colors"
-                  >
-                    <History className="w-4 h-4 text-minimal-muted" />
-                    <span className="text-sm font-medium">Version History</span>
-                  </button>
-                </div>
-
-                <div className="space-y-1">
                   <p className="px-3 text-[10px] font-bold text-minimal-muted uppercase tracking-wider mb-2">Actions</p>
-                  <div className="grid grid-cols-3 gap-2 px-3 mb-2">
-                    <button
-                      onClick={downloadMarkdown}
-                      className="flex flex-col items-center gap-2 p-3 bg-zinc-50 rounded-xl hover:bg-blue-50 transition-colors"
-                    >
-                      <Download className="w-4 h-4 text-blue-500" />
-                      <span className="text-[10px] font-bold">Markdown</span>
-                    </button>
-                    <button
-                      onClick={exportToHtml}
-                      className="flex flex-col items-center gap-2 p-3 bg-zinc-50 rounded-xl hover:bg-orange-50 transition-colors"
-                    >
-                      <FileText className="w-4 h-4 text-orange-500" />
-                      <span className="text-[10px] font-bold">HTML</span>
-                    </button>
-                    <button
-                      onClick={exportToPdf}
-                      className="flex flex-col items-center gap-2 p-3 bg-zinc-50 rounded-xl hover:bg-red-50 transition-colors"
-                    >
-                      <FileDown className="w-4 h-4 text-red-500" />
-                      <span className="text-[10px] font-bold">PDF</span>
-                    </button>
-                  </div>
                   <button
                     onClick={() => { clearEditor(); setShowMobileMenu(false); }}
                     className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-zinc-100 text-red-500 transition-colors"
@@ -789,99 +369,6 @@ export default function App() {
                   <FocusOn className="w-4 h-4" />
                   <span className="text-xs font-bold uppercase">Enter Zen Mode</span>
                 </button>
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-
-      {/* Version History Sidebar */}
-      <AnimatePresence>
-        {showHistory && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowHistory(false)}
-              className="fixed inset-0 bg-zinc-950/20 backdrop-blur-sm z-[60]"
-            />
-            <motion.div
-              initial={{ x: 400, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              exit={{ x: 400, opacity: 0 }}
-              className="fixed top-0 end-0 bottom-0 w-full md:w-[400px] bg-white border-s border-minimal-border z-[70] shadow-2xl flex flex-col"
-            >
-              <div className="p-6 border-b border-minimal-border flex justify-between items-center bg-zinc-50">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-minimal-accent flex items-center justify-center text-white shadow-lg">
-                    <History className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <h2 className="text-sm font-bold text-minimal-text uppercase tracking-widest">Version History</h2>
-                    <p className="text-[10px] text-minimal-muted font-medium">Auto-checkpoints enabled</p>
-                  </div>
-                </div>
-                <button 
-                  onClick={() => setShowHistory(false)}
-                  className="p-2 hover:bg-minimal-border rounded-full transition-colors"
-                >
-                  <X className="w-4 h-4 text-minimal-muted" />
-                </button>
-              </div>
-
-              <div className="p-4 bg-minimal-accent/5 border-b border-minimal-border">
-                <button
-                  onClick={() => saveVersion(true)}
-                  className="w-full flex items-center justify-center gap-2 p-3 bg-minimal-accent text-white rounded-xl shadow-lg hover:scale-105 active:scale-95 transition-all text-sm font-bold"
-                >
-                  <Check className="w-4 h-4" />
-                  Save Manual Snapshot
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
-                {history.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-full text-center px-8 opacity-50">
-                    <History className="w-12 h-12 mb-4 text-minimal-muted" />
-                    <p className="text-sm font-medium">No history yet.</p>
-                    <p className="text-xs">Snapshots are taken every 5 mins or when you manually save.</p>
-                  </div>
-                ) : (
-                  history.map((v) => (
-                    <div
-                      key={v.id}
-                      onClick={() => revertToVersion(v)}
-                      className="group p-4 rounded-2xl border border-minimal-border hover:border-minimal-accent hover:bg-minimal-accent/5 cursor-pointer transition-all relative"
-                    >
-                      <div className="flex justify-between items-start mb-1">
-                        <span className="text-xs font-bold text-minimal-text">
-                          {new Date(v.timestamp).toLocaleDateString()} at {new Date(v.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                        <button
-                          onClick={(e) => deleteVersion(v.id, e)}
-                          className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 text-red-500 rounded transition-all"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
-                      <div className="flex items-center gap-3 text-[10px] text-minimal-muted font-bold uppercase tracking-wider">
-                        <span>{v.wordCount} words</span>
-                        <div className="w-1 h-1 rounded-full bg-minimal-border" />
-                        <span className="text-minimal-accent/70">Snapshot #{v.id.substring(0, 4)}</span>
-                      </div>
-                      <p className="mt-2 text-[11px] text-minimal-muted line-clamp-2 italic leading-relaxed">
-                        "{v.content.substring(0, 100)}..."
-                      </p>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              <div className="p-6 bg-zinc-50 border-t border-minimal-border">
-                <p className="text-[10px] text-center text-minimal-muted font-medium italic">
-                  Tip: Versions are stored locally in your browser. Clearing browser data will remove them.
-                </p>
               </div>
             </motion.div>
           </>
@@ -1093,25 +580,93 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className={cn(
-        "flex-1 flex overflow-hidden bg-minimal-sidebar transition-all duration-700",
-        isFocusMode ? "pt-0" : "pt-14"
+        "flex-1 flex overflow-hidden bg-minimal-sidebar transition-all duration-1000",
+        "pt-0"
       )}>
         {isFocusMode && (
-          <motion.button
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 0.3 }}
-            whileHover={{ opacity: 1 }}
-            onClick={() => setIsFocusMode(false)}
-            className="fixed top-8 end-8 z-50 p-3 bg-white/80 backdrop-blur border border-minimal-border rounded-full shadow-lg text-minimal-muted hover:text-minimal-accent transition-all"
-            title="Exit Focus Mode"
-          >
-            <FocusOff className="w-5 h-5" />
-          </motion.button>
+          <div className="fixed top-8 right-8 z-50 flex flex-col gap-3">
+            {/* Assistant Toggle */}
+            <motion.button
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 0.5, x: 0 }}
+              whileHover={{ opacity: 1, scale: 1.05 }}
+              onClick={() => setShowAiAssistant(!showAiAssistant)}
+              className={cn(
+                "p-3.5 backdrop-blur border rounded-full shadow-2xl transition-all duration-300",
+                showAiAssistant ? "bg-minimal-accent border-minimal-accent text-white" : "bg-white/90 border-minimal-border text-minimal-muted"
+              )}
+              title="AI Assistant"
+            >
+              <Sparkles className="w-5 h-5" />
+            </motion.button>
+
+            {/* Search Toggle */}
+            <motion.button
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 0.5, x: 0 }}
+              whileHover={{ opacity: 1, scale: 1.05 }}
+              onClick={() => { setShowSearch(!showSearch); setSearchIndex(-1); }}
+              className={cn(
+                "p-3.5 backdrop-blur border rounded-full shadow-2xl transition-all duration-300",
+                showSearch ? "bg-minimal-accent border-minimal-accent text-white" : "bg-white/90 border-minimal-border text-minimal-muted"
+              )}
+              title="Find & Replace"
+            >
+              <Search className="w-5 h-5" />
+            </motion.button>
+
+            <div className="h-px bg-minimal-border/30 mx-3 my-1" />
+
+            {/* Typewriter toggle */}
+            <motion.button
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 0.5, x: 0 }}
+              whileHover={{ opacity: 1, scale: 1.05 }}
+              onClick={() => setIsTypewriterMode(!isTypewriterMode)}
+              className={cn(
+                "p-3.5 backdrop-blur border rounded-full shadow-2xl transition-all duration-300",
+                isTypewriterMode ? "bg-minimal-accent border-minimal-accent text-white" : "bg-white/90 border-minimal-border text-minimal-muted"
+              )}
+              title="Typewriter Mode"
+            >
+              <Type className="w-5 h-5" />
+            </motion.button>
+
+            {/* Orientation toggle */}
+            <motion.button
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 0.5, x: 0 }}
+              whileHover={{ opacity: 1, scale: 1.05 }}
+              onClick={() => setDirection(prev => prev === 'ltr' ? 'rtl' : 'ltr')}
+              className={cn(
+                "p-3.5 backdrop-blur border rounded-full shadow-2xl bg-white/90 border-minimal-border text-minimal-muted transition-all duration-300"
+              )}
+              title={`Switch to ${direction === 'ltr' ? 'RTL' : 'LTR'}`}
+            >
+              <Languages className="w-5 h-5" />
+            </motion.button>
+
+            <div className="h-px bg-minimal-border/30 mx-3 my-1" />
+
+            {/* Wipe Document */}
+            <motion.button
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 0.5, x: 0 }}
+              whileHover={{ opacity: 1, scale: 1.05, color: '#ef4444' }}
+              onClick={clearEditor}
+              className="p-3.5 bg-white/90 backdrop-blur border border-minimal-border rounded-full shadow-2xl text-minimal-muted transition-all duration-300"
+              title="Wipe Document"
+            >
+              <Trash2 className="w-5 h-5" />
+            </motion.button>
+          </div>
         )}
         <div className={cn(
-          "flex-1 relative flex flex-col transition-all duration-700",
-          "max-w-4xl mx-auto bg-minimal-bg border-minimal-border",
-          !isFocusMode ? "border-s border-e" : "max-w-3xl"
+          "flex-1 relative flex flex-col transition-all duration-1000 ease-[cubic-bezier(0.23,1,0.32,1)]",
+          "max-w-4xl mx-auto border-minimal-border",
+          !isFocusMode 
+            ? "bg-minimal-bg border-s border-e shadow-none" 
+            : "max-w-3xl my-8 mb-32 rounded-2xl bg-[#fdfdfc] border border-minimal-border/50 shadow-[0_30px_90px_-20px_rgba(0,0,0,0.1),0_20px_40px_-25px_rgba(30,41,59,0.15)] ring-1 ring-black/[0.02]"
         )}>
           {/* Find and Replace Bar */}
           <AnimatePresence>
@@ -1120,7 +675,7 @@ export default function App() {
                 initial={{ y: -20, opacity: 0 }}
                 animate={{ y: 0, opacity: 1 }}
                 exit={{ y: -20, opacity: 0 }}
-                className="absolute top-4 right-8 z-30 bg-white border border-minimal-border rounded-xl shadow-xl p-3 flex flex-col gap-2 w-80"
+                className="absolute top-4 right-8 z-30 bg-white border border-minimal-border rounded-xl shadow-xl p-3 flex flex-col gap-2 w-[360px]"
               >
                 <div className="flex items-center gap-2">
                   <div className="flex-1 bg-zinc-50 rounded-lg flex items-center px-3 border border-minimal-border focus-within:border-minimal-accent transition-colors">
@@ -1137,6 +692,11 @@ export default function App() {
                       className="bg-transparent border-none outline-none text-[13px] py-1.5 w-full font-medium"
                       autoFocus
                     />
+                    {findText && (
+                      <div className="text-[10px] font-bold text-minimal-accent px-1.5 py-0.5 bg-minimal-accent/10 rounded mr-1">
+                        {matchCount > 0 ? `${currentMatchIndex || '-'} / ${matchCount}` : '0 / 0'}
+                      </div>
+                    )}
                     <div className="flex items-center gap-1 ml-2">
                       <button
                         onClick={() => {
@@ -1214,6 +774,8 @@ export default function App() {
             isTypewriter={isTypewriterMode}
             direction={direction}
             aiPersonalInstructions={aiPersonalInstructions}
+            searchQuery={showSearch ? findText : ''}
+            searchOptions={{ isCaseSensitive, isWholeWord, searchIndex, currentMatchIndex }}
             className="flex-1 overflow-y-auto"
           />
         </div>
