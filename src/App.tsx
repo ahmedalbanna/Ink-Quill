@@ -16,6 +16,7 @@ import {
   Search,
   ArrowRightLeft,
   ChevronDown,
+  Plus,
   Maximize2 as FocusOn,
   Minimize2 as FocusOff,
   Clock,
@@ -30,11 +31,13 @@ import {
   Heading1,
   Heading2,
   Heading3,
+  Settings,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import Markdown from 'react-markdown';
 import { cn } from './lib/utils';
 import ProseMirrorEditor, { EditorRef } from './components/ProseMirrorEditor';
-import { generateContentFromPrompt, processAIAction } from './services/aiService';
+import { generateContentFromPrompt, processAIAction, chatWithAI, type ChatMessage } from './services/aiService';
 
 const DEFAULT_MARKDOWN = `# Welcome to Ink & Quill
 
@@ -76,6 +79,7 @@ export default function App() {
   });
   const [showAiAssistant, setShowAiAssistant] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
+  const [aiResult, setAiResult] = useState<string | null>(null);
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [findText, setFindText] = useState('');
@@ -95,6 +99,15 @@ export default function App() {
   const [aiPersonalInstructions, setAiPersonalInstructions] = useState<string>(() => {
     return localStorage.getItem('ink-quill-ai-prefs') || "";
   });
+  const [showAiSettings, setShowAiSettings] = useState(false);
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [chatHistory]);
   const [wordGoal, setWordGoal] = useState<number>(() => {
     const saved = localStorage.getItem('ink-quill-goal');
     return saved ? parseInt(saved) : 0;
@@ -269,20 +282,48 @@ export default function App() {
 
   const handleAiGenerate = async () => {
     if (!aiPrompt.trim()) return;
+    
+    const userMessage: ChatMessage = { role: 'user', parts: [{ text: aiPrompt }] };
+    const newHistory = [...chatHistory, userMessage];
+    setChatHistory(newHistory);
+    setAiPrompt('');
     setIsGeneratingAi(true);
+    setAiResult(null);
+
     try {
-      const generated = await generateContentFromPrompt(aiPrompt, markdown, aiPersonalInstructions);
-      // Use editorRef for smoother integration
-      const prefix = markdown.trim() ? "\n\n" : "";
-      editorRef.current?.appendMarkdown(prefix + generated);
-      setAiPrompt('');
-      setShowAiAssistant(false);
+      const response = await chatWithAI(newHistory, markdown, aiPersonalInstructions);
+      const modelMessage: ChatMessage = { role: 'model', parts: [{ text: response }] };
+      setChatHistory(prev => [...prev, modelMessage]);
+      setAiResult(response);
     } catch (error) {
       console.error("AI Generation failed:", error);
       alert("AI Generation failed. Check console.");
     } finally {
       setIsGeneratingAi(false);
     }
+  };
+
+  const applyAiResult = (method: 'append' | 'insert' | 'replace' | 'suggest') => {
+    if (!aiResult) return;
+
+    switch (method) {
+      case 'append':
+        const prefix = markdown.trim() ? "\n\n" : "";
+        editorRef.current?.appendMarkdown(prefix + aiResult);
+        break;
+      case 'insert':
+        editorRef.current?.replaceSelectionWithMarkdown(aiResult);
+        break;
+      case 'replace':
+        editorRef.current?.replaceSelectionWithMarkdown(aiResult);
+        break;
+      case 'suggest':
+        editorRef.current?.replaceSelectionWithMarkdown(`\n\n> **Suggested Edit:**\n> ${aiResult.split('\n').join('\n> ')}\n\n`);
+        break;
+    }
+    
+    setAiResult(null);
+    setShowAiAssistant(false);
   };
 
   const toolbarButtons = [
@@ -392,189 +433,241 @@ export default function App() {
               exit={{ x: 400, opacity: 0 }}
               className="fixed top-0 end-0 bottom-0 w-full md:w-[400px] bg-white border-s border-minimal-border z-[70] shadow-2xl flex flex-col"
             >
-              <div className="p-6 border-b border-minimal-border flex justify-between items-center bg-zinc-50">
+              <div className="p-4 md:p-6 border-b border-minimal-border flex justify-between items-center bg-zinc-50">
                 <div className="flex items-center gap-2">
                   <div className="w-8 h-8 rounded-lg bg-minimal-accent flex items-center justify-center text-white shadow-lg">
                     <Sparkles className="w-4 h-4" />
                   </div>
                   <div>
-                    <h2 className="text-sm font-bold text-minimal-text uppercase tracking-widest">AI Writing Partner</h2>
-                    <p className="text-[10px] text-minimal-muted font-medium">Powered by Gemini</p>
+                    <h2 className="text-sm font-bold text-minimal-text uppercase tracking-widest leading-none">AI Assistant</h2>
+                    <p className="text-[10px] text-minimal-muted font-medium mt-1">Converse & Refine</p>
                   </div>
                 </div>
-                <button 
-                  onClick={() => setShowAiAssistant(false)}
-                  className="p-2 hover:bg-minimal-border rounded-full transition-colors"
-                >
-                  <X className="w-4 h-4 text-minimal-muted" />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button 
+                    onClick={() => setShowAiSettings(!showAiSettings)}
+                    className={cn(
+                      "p-2 rounded-full transition-all",
+                      showAiSettings ? "bg-minimal-accent/10 text-minimal-accent" : "hover:bg-minimal-border text-minimal-muted"
+                    )}
+                    title="AI Settings"
+                  >
+                    <Settings className="w-4 h-4" />
+                  </button>
+                  <button 
+                    onClick={() => setShowAiAssistant(false)}
+                    className="p-2 hover:bg-minimal-border rounded-full transition-colors"
+                  >
+                    <X className="w-4 h-4 text-minimal-muted" />
+                  </button>
+                </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-6 space-y-8">
-                <section>
-                  <h3 className="text-xs font-bold text-minimal-muted uppercase tracking-wider mb-3">Refinement Preferences</h3>
-                  <div className="bg-minimal-accent/5 border border-minimal-accent/20 rounded-2xl p-4">
-                    <p className="text-[11px] text-minimal-accent font-bold mb-2 uppercase tracking-wide">AI Listening Profile</p>
-                    <textarea
-                      value={aiPersonalInstructions}
-                      onChange={(e) => setAiPersonalInstructions(e.target.value)}
-                      placeholder="e.g., 'Avoid jargon', 'Be witty', 'Keep sentences short'..."
-                      className="w-full h-20 bg-transparent border-none p-0 text-xs focus:ring-0 outline-none transition-all resize-none font-medium leading-relaxed text-minimal-text placeholder:text-minimal-muted/50"
-                    />
-                    <div className="mt-2 flex items-center gap-2">
-                       <Check className="w-3 h-3 text-minimal-accent" />
-                       <span className="text-[10px] font-bold text-minimal-accent/70">Preferences will be applied to all future generations</span>
-                    </div>
-                  </div>
-                </section>
-
-                <section>
-                  <h3 className="text-xs font-bold text-minimal-muted uppercase tracking-wider mb-3">Compose Something New</h3>
-                  <div className="relative">
-                    <textarea
-                      value={aiPrompt}
-                      onChange={(e) => setAiPrompt(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                          handleAiGenerate();
-                        }
-                      }}
-                      placeholder="e.g., 'Write a professional email inviting a client to a lunch meeting' or 'Generate 5 blog post ideas about minimalism'..."
-                      className="w-full h-40 bg-zinc-50 border border-minimal-border rounded-2xl p-4 text-sm focus:ring-2 focus:ring-minimal-accent/20 focus:border-minimal-accent outline-none transition-all resize-none font-medium leading-relaxed"
-                    />
-                    <button
-                      onClick={handleAiGenerate}
-                      disabled={isGeneratingAi || !aiPrompt.trim()}
-                      className="absolute bottom-3 right-3 p-3 bg-minimal-accent text-white rounded-xl shadow-lg hover:scale-105 active:scale-95 disabled:opacity-50 disabled:scale-100 transition-all"
+              <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                <AnimatePresence>
+                  {showAiSettings && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      className="overflow-hidden border-b border-minimal-border bg-white"
                     >
-                      {isGeneratingAi ? (
-                        <motion.div
-                          animate={{ rotate: 360 }}
-                          transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                      <div className="p-4 space-y-4">
+                         <div className="flex items-center justify-between">
+                           <h3 className="text-[10px] font-bold text-minimal-muted uppercase tracking-wider">Refinement Preferences</h3>
+                           <button 
+                              onClick={() => setAiPersonalInstructions("")}
+                              className="text-[9px] font-bold text-minimal-muted hover:text-red-500 transition-colors uppercase"
+                           >
+                             Reset
+                           </button>
+                         </div>
+                         <div className="bg-minimal-accent/5 border border-minimal-accent/20 rounded-2xl p-4">
+                           <p className="text-[10px] text-minimal-accent font-bold mb-2 uppercase tracking-wide">Listening Profile</p>
+                           <textarea
+                             value={aiPersonalInstructions}
+                             onChange={(e) => setAiPersonalInstructions(e.target.value)}
+                             placeholder="Specify your style preferences (e.g., 'Formal tone', 'Short paragraphs')..."
+                             className="w-full h-24 bg-transparent border-none p-0 text-xs focus:ring-0 outline-none transition-all resize-none font-medium leading-relaxed text-minimal-text placeholder:text-minimal-muted/40"
+                           />
+                           <div className="mt-2 flex items-center gap-2 border-t border-minimal-accent/10 pt-2">
+                              <Check className="w-2.5 h-2.5 text-minimal-accent" />
+                              <span className="text-[9px] font-bold text-minimal-accent/70 uppercase">Applied to all generations</span>
+                           </div>
+                         </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-8" ref={chatScrollRef}>
+                  {chatHistory.length === 0 && (
+                    <div className="h-full flex flex-col items-center justify-center text-center space-y-4 opacity-40 py-12">
+                       <div className="w-12 h-12 rounded-2xl bg-zinc-100 flex items-center justify-center">
+                          <Sparkles className="w-6 h-6 text-minimal-text" />
+                       </div>
+                       <div>
+                          <h3 className="text-xs font-bold uppercase tracking-widest mb-1">Deep Intelligence</h3>
+                          <p className="text-[10px] font-medium max-w-[200px] mx-auto">Ask Gemini to write, rewrite, or brainstorm with you.</p>
+                       </div>
+                    </div>
+                  )}
+
+                  {chatHistory.length > 0 && (
+                    <section className="space-y-6">
+                      <div className="flex items-center justify-between sticky top-0 bg-white/80 backdrop-blur pb-2 z-10">
+                        <h3 className="text-[10px] font-bold text-minimal-muted uppercase tracking-widest">Conversation history</h3>
+                        <button 
+                          onClick={() => setChatHistory([])}
+                          className="text-[10px] font-bold text-minimal-accent hover:bg-minimal-accent/10 px-2 py-1 rounded transition-colors uppercase"
                         >
-                          <Sparkles className="w-4 h-4" />
-                        </motion.div>
-                      ) : (
-                        <Send className="w-4 h-4" />
-                      )}
-                    </button>
-                  </div>
-                </section>
+                          Clear
+                        </button>
+                      </div>
+                      <div className="space-y-6 pb-4">
+                        {chatHistory.map((msg, idx) => (
+                          <div key={idx} className={cn(
+                            "flex flex-col gap-2 max-w-[90%]",
+                            msg.role === 'user' ? "ml-auto items-end" : "mr-auto items-start"
+                          )}>
+                            <div className={cn(
+                              "px-4 py-3 rounded-2xl text-xs font-medium leading-relaxed",
+                              msg.role === 'user' 
+                                ? "bg-minimal-accent text-white rounded-tr-none shadow-md shadow-minimal-accent/20" 
+                                : "bg-zinc-50 border border-minimal-border text-minimal-text rounded-tl-none"
+                            )}>
+                              <Markdown>{msg.parts[0].text}</Markdown>
+                            </div>
+                            <span className="text-[8px] font-bold text-minimal-muted uppercase tracking-widest opacity-60 px-1">
+                              {msg.role === 'user' ? 'Direct Input' : 'Ink & Quill Intelligence'}
+                            </span>
+                          </div>
+                        ))}
+                        {isGeneratingAi && (
+                          <div className="flex flex-col gap-2 items-start mr-auto max-w-[90%]">
+                            <div className="px-5 py-3 bg-zinc-50 border border-minimal-border rounded-2xl rounded-tl-none flex items-center gap-1.5">
+                               {[0, 1, 2].map(i => (
+                                 <motion.div
+                                    key={i}
+                                    animate={{ y: [0, -3, 0], opacity: [0.3, 1, 0.3] }}
+                                    transition={{ duration: 1.2, repeat: Infinity, delay: i * 0.2 }}
+                                    className="w-1.5 h-1.5 bg-minimal-accent rounded-full"
+                                 />
+                               ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </section>
+                  )}
+                </div>
 
-                <section>
-                  <h3 className="text-xs font-bold text-minimal-muted uppercase tracking-wider mb-3">Quick Actions</h3>
-                  <div className="grid grid-cols-1 gap-2">
-                    {[
-                      { 
-                        title: 'Improve Flow', 
-                        desc: 'Refine syntax and vocabulary',
-                        action: async () => {
-                          const selected = editorRef.current?.getSelectedText();
-                          if (!selected || !selected.trim()) {
-                            alert("Please select text in the editor to use this action.");
-                            return;
+                <div className="p-4 md:p-6 bg-zinc-50 border-t border-minimal-border">
+                  <section>
+                    <div className="relative group">
+                      <textarea
+                        value={aiPrompt}
+                        onChange={(e) => setAiPrompt(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                            handleAiGenerate();
                           }
-                          setIsGeneratingAi(true);
-                          try {
-                            const improved = await processAIAction(selected, 'improve', aiPersonalInstructions);
-                            editorRef.current?.replaceSelectionWithMarkdown(improved);
-                            setShowAiAssistant(false);
-                          } catch (e) {
-                            console.error(e);
-                            alert("Failed to improve text.");
-                          } finally {
-                            setIsGeneratingAi(false);
-                          }
-                        }
-                      },
-                      { 
-                        title: 'Summary', 
-                        desc: 'Condense the current working document',
-                        action: async () => {
-                          setIsGeneratingAi(true);
-                          try {
-                            const summary = await generateContentFromPrompt("Please summarize the current text in 3 bullet points. Be concise.", markdown, aiPersonalInstructions);
-                            editorRef.current?.appendMarkdown("\n\n### Document Summary\n" + summary);
-                            setShowAiAssistant(false);
-                          } catch (e) { console.error(e); }
-                          finally { setIsGeneratingAi(false); }
-                        }
-                      },
-                      { 
-                        title: 'Draft from Outline', 
-                        desc: 'Expand a selected outline into a full draft',
-                        action: async () => {
-                          const selected = editorRef.current?.getSelectedText();
-                          if (!selected || !selected.trim()) {
-                            alert("Please select your outline in the editor first.");
-                            return;
-                          }
-                          setIsGeneratingAi(true);
-                          try {
-                            const draft = await processAIAction(selected, 'expand-outline', aiPersonalInstructions);
-                            editorRef.current?.appendMarkdown("\n\n" + draft);
-                            setShowAiAssistant(false);
-                          } catch (e) {
-                            console.error(e);
-                            alert("Failed to extend from outline.");
-                          } finally {
-                            setIsGeneratingAi(false);
-                          }
-                        }
-                      },
-                      { 
-                        title: 'Generate Outline', 
-                        desc: 'Create a structural outline from current text',
-                        action: async () => {
-                          if (!markdown.trim()) {
-                            alert("Document is empty. Try 'Draft Topic' instead.");
-                            return;
-                          }
-                          setIsGeneratingAi(true);
-                          try {
-                            const outline = await processAIAction(markdown, 'generate-outline', aiPersonalInstructions);
-                            editorRef.current?.appendMarkdown("\n\n### Structural Outline\n" + outline);
-                            setShowAiAssistant(false);
-                          } catch (e) { 
-                            console.error(e); 
-                            alert("Failed to generate outline.");
-                          } finally { 
-                            setIsGeneratingAi(false); 
-                          }
-                        }
-                      },
-                      { 
-                        title: 'Draft Topic', 
-                        desc: 'Get an AI starting point for any subject',
-                        action: () => {
-                          setAiPrompt("Draft a detailed piece about: ");
-                          // Focus the prompt textarea
-                          const textarea = document.querySelector('textarea:last-of-type') as HTMLTextAreaElement;
-                          if (textarea) textarea.focus();
-                        }
-                      }
-                    ]
-.map((item, idx) => (
+                        }}
+                        placeholder={chatHistory.length > 0 ? "Ask a follow up..." : "How can I help you write today?"}
+                        className="w-full h-28 bg-white border border-minimal-border rounded-2xl p-4 text-xs focus:ring-4 focus:ring-minimal-accent/5 focus:border-minimal-accent outline-none transition-all resize-none font-medium leading-relaxed pr-12 group-hover:border-minimal-accent/50"
+                      />
                       <button
-                        key={idx}
-                        onClick={item.action}
-                        className="w-full p-4 rounded-2xl border border-minimal-border hover:border-minimal-accent hover:bg-minimal-accent/5 text-left transition-all group"
+                        onClick={handleAiGenerate}
+                        disabled={isGeneratingAi || !aiPrompt.trim()}
+                        className="absolute bottom-3 right-3 p-3 bg-minimal-accent text-white rounded-xl shadow-lg hover:scale-105 active:scale-95 disabled:opacity-50 disabled:scale-100 transition-all"
                       >
-                        <h4 className="text-sm font-bold text-minimal-text group-hover:text-minimal-accent transition-colors">{item.title}</h4>
-                        <p className="text-xs text-minimal-muted mt-0.5">{item.desc}</p>
+                        <Send className="w-4 h-4" />
                       </button>
-                    ))}
-                  </div>
-                </section>
-              </div>
+                      <div className="absolute top-2 right-3">
+                         <span className="text-[9px] font-bold text-minimal-muted/40 uppercase tracking-tighter">CMD+Enter</span>
+                      </div>
+                    </div>
 
-              <div className="p-6 bg-zinc-50 border-t border-minimal-border">
-                <p className="text-[10px] text-center text-minimal-muted font-medium italic">
-                  Tip: Highlight text in the editor for instant contextual editing.
-                </p>
+                    {chatHistory.length === 0 && (
+                      <div className="mt-4 grid grid-cols-2 gap-2">
+                         <button onClick={() => setAiPrompt("Brainstorm 5 topics for ")} className="p-2 border border-minimal-border rounded-xl text-[10px] font-bold uppercase tracking-wider text-minimal-muted hover:bg-white hover:text-minimal-accent transition-all">Quick Brainstorm</button>
+                         <button onClick={() => setAiPrompt("Draft a professional ")} className="p-2 border border-minimal-border rounded-xl text-[10px] font-bold uppercase tracking-wider text-minimal-muted hover:bg-white hover:text-minimal-accent transition-all">Quick Draft</button>
+                      </div>
+                    )}
+                  </section>
+                </div>
               </div>
             </motion.div>
           </>
+        )}
+      </AnimatePresence>
+
+      {/* Floating AI Review Panel */}
+      <AnimatePresence>
+        {aiResult && (
+          <motion.div
+            initial={{ y: 100, opacity: 0, x: '-50%' }}
+            animate={{ y: 0, opacity: 1, x: '-50%' }}
+            exit={{ y: 100, opacity: 0, x: '-50%' }}
+            className="fixed bottom-12 md:bottom-16 left-1/2 z-[100] w-[95%] max-w-[600px] bg-white border border-minimal-border rounded-3xl shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] overflow-hidden flex flex-col max-h-[70vh]"
+          >
+            <div className="px-6 py-4 border-b border-minimal-border flex items-center justify-between bg-zinc-50/50">
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded-lg bg-minimal-accent/10 flex items-center justify-center text-minimal-accent">
+                   <Sparkles className="w-3.5 h-3.5" />
+                </div>
+                <h3 className="text-[11px] font-bold text-minimal-text uppercase tracking-widest">Intelligent Draft Review</h3>
+              </div>
+              <div className="flex items-center gap-2">
+                 <button 
+                  onClick={() => setAiResult(null)}
+                  className="px-3 py-1.5 text-[10px] font-bold text-minimal-muted hover:text-red-500 hover:bg-red-50 rounded-full transition-all uppercase"
+                >
+                  Discard
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 bg-white custom-scrollbar">
+              <div className="prose prose-sm max-w-none font-medium text-minimal-text leading-relaxed prose-headings:text-minimal-accent prose-headings:font-bold prose-p:mb-4">
+                <Markdown>{aiResult}</Markdown>
+              </div>
+            </div>
+
+            <div className="p-4 bg-zinc-50 border-t border-minimal-border">
+               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  <button
+                    onClick={() => applyAiResult('replace')}
+                    className="flex flex-col items-center justify-center gap-1.5 p-3 bg-minimal-accent text-white rounded-2xl text-[10px] font-bold shadow-lg shadow-minimal-accent/20 hover:scale-[1.02] active:scale-95 transition-all group"
+                  >
+                    <Check className="w-4 h-4 group-hover:scale-110 transition-transform" />
+                    <span>REPLACE</span>
+                  </button>
+                  <button
+                    onClick={() => applyAiResult('insert')}
+                    className="flex flex-col items-center justify-center gap-1.5 p-3 bg-white border border-minimal-border text-minimal-text rounded-2xl text-[10px] font-bold hover:bg-zinc-100 hover:border-minimal-accent/30 transition-all group"
+                  >
+                    <Plus className="w-4 h-4 text-minimal-accent group-hover:rotate-90 transition-transform" />
+                    <span>INSERT</span>
+                  </button>
+                  <button
+                    onClick={() => applyAiResult('append')}
+                    className="flex flex-col items-center justify-center gap-1.5 p-3 bg-white border border-minimal-border text-minimal-text rounded-2xl text-[10px] font-bold hover:bg-zinc-100 hover:border-minimal-accent/30 transition-all group"
+                  >
+                    <ChevronDown className="w-4 h-4 text-minimal-accent group-hover:translate-y-0.5 transition-transform" />
+                    <span>APPEND</span>
+                  </button>
+                  <button
+                    onClick={() => applyAiResult('suggest')}
+                    className="flex flex-col items-center justify-center gap-1.5 p-3 bg-white border border-minimal-border text-minimal-text rounded-2xl text-[10px] font-bold hover:bg-zinc-100 hover:border-minimal-accent/30 transition-all group"
+                  >
+                    <ArrowRightLeft className="w-4 h-4 text-minimal-accent group-hover:rotate-180 transition-transform duration-500" />
+                    <span>SUGGEST</span>
+                  </button>
+               </div>
+               <p className="text-[9px] text-center text-minimal-muted/60 mt-3 font-medium uppercase tracking-tight">Select desired integration method above to update your document</p>
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
 
@@ -644,6 +737,28 @@ export default function App() {
               title={`Switch to ${direction === 'ltr' ? 'RTL' : 'LTR'}`}
             >
               <Languages className="w-5 h-5" />
+            </motion.button>
+
+            {/* Daily Goal Toggle */}
+            <motion.button
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 0.5, x: 0 }}
+              whileHover={{ opacity: 1, scale: 1.05 }}
+              onClick={() => {
+                const goal = window.prompt("Set your word count goal:", wordGoal.toString());
+                if (goal !== null) {
+                  const parsed = parseInt(goal);
+                  setWordGoal(parsed || 0);
+                  localStorage.setItem('ink-quill-goal', (parsed || 0).toString());
+                }
+              }}
+              className={cn(
+                "p-3.5 backdrop-blur border rounded-full shadow-2xl transition-all duration-300",
+                wordGoal > 0 ? "bg-minimal-accent border-minimal-accent text-white" : "bg-white/90 border-minimal-border text-minimal-muted"
+              )}
+              title="Daily Word Goal"
+            >
+              <Target className="w-5 h-5" />
             </motion.button>
 
             <div className="h-px bg-minimal-border/30 mx-3 my-1" />
@@ -774,6 +889,10 @@ export default function App() {
             isTypewriter={isTypewriterMode}
             direction={direction}
             aiPersonalInstructions={aiPersonalInstructions}
+            onAiResult={(result) => {
+              setAiResult(result);
+              setShowAiAssistant(true);
+            }}
             searchQuery={showSearch ? findText : ''}
             searchOptions={{ isCaseSensitive, isWholeWord, searchIndex, currentMatchIndex }}
             className="flex-1 overflow-y-auto"
@@ -783,45 +902,54 @@ export default function App() {
 
       {/* Footer / Status */}
       <AnimatePresence mode="wait">
-        {!isFocusMode && (
-          <motion.footer 
-            initial={{ y: 20, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: 20, opacity: 0 }}
-            className="fixed bottom-0 inset-x-0 h-8 md:h-10 bg-minimal-bg border-t border-minimal-border z-50 px-4 md:px-6 flex items-center justify-between text-[10px] md:text-[11px] text-minimal-muted tracking-tight"
-          >
-            <div className="flex gap-4 md:gap-6 items-center">
-              <div className="flex gap-2 md:gap-4">
-                <span>Words: {wordCount}</span>
-                <span className="hidden sm:inline">Characters: {charCount}</span>
-              </div>
-              <div className="h-3 w-px bg-minimal-border hidden sm:block" />
-              <div className="hidden sm:flex items-center gap-2">
-                <Clock className="w-3 h-3" />
-                <span>{readingTime} min read</span>
-              </div>
-              {wordGoal > 0 && (
-                <>
-                  <div className="h-3 w-px bg-minimal-border hidden md:block" />
-                  <div className="flex items-center gap-2 md:gap-3">
-                    <div className="w-16 md:w-24 h-1.5 bg-zinc-100 rounded-full overflow-hidden hidden sm:block">
-                      <motion.div 
-                        initial={{ width: 0 }}
-                        animate={{ width: `${goalProgress}%` }}
-                        className="h-full bg-minimal-accent"
-                      />
-                    </div>
-                    <span className="font-bold text-minimal-accent">{Math.round(goalProgress)}% <span className="hidden sm:inline">of goal</span></span>
+        <motion.footer 
+          initial={{ y: 20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={{ y: 20, opacity: 0 }}
+          className={cn(
+            "fixed bottom-0 inset-x-0 h-8 md:h-10 border-t border-minimal-border z-50 px-4 md:px-6 flex items-center justify-between text-[10px] md:text-[11px] tracking-tight transition-all duration-1000",
+            isFocusMode ? "bg-transparent border-transparent text-minimal-muted/60" : "bg-minimal-bg text-minimal-muted"
+          )}
+        >
+          <div className="flex gap-4 md:gap-6 items-center">
+            <div className="flex gap-2 md:gap-4">
+              <span className="font-medium">W: {wordCount}</span>
+              <span className="hidden sm:inline opacity-60">C: {charCount}</span>
+            </div>
+            <div className="h-3 w-px bg-minimal-border/20 hidden sm:block" />
+            <div className="hidden sm:flex items-center gap-2">
+              <Clock className="w-3 h-3 opacity-60" />
+              <span className="opacity-60">{readingTime} min read</span>
+            </div>
+            {wordGoal > 0 && (
+              <>
+                <div className="h-3 w-px bg-minimal-border/20 hidden md:block" />
+                <div className="flex items-center gap-2 md:gap-3">
+                  <div className="w-16 md:w-32 h-1 bg-minimal-border/20 rounded-full overflow-hidden hidden sm:block">
+                    <motion.div 
+                      initial={{ width: 0 }}
+                      animate={{ width: `${goalProgress}%` }}
+                      className="h-full bg-minimal-accent"
+                    />
                   </div>
-                </>
-              )}
-            </div>
-            <div className="flex gap-4">
-              <span className="hidden sm:inline">UTF-8</span>
-              <span className="text-minimal-accent font-semibold tracking-wider">MD</span>
-            </div>
-          </motion.footer>
-        )}
+                  <span className={cn(
+                    "font-bold transition-colors",
+                    goalProgress >= 100 ? "text-emerald-500" : "text-minimal-accent"
+                  )}>
+                    {Math.round(goalProgress)}% <span className="hidden sm:inline font-medium opacity-60">Complete</span>
+                  </span>
+                </div>
+              </>
+            )}
+          </div>
+          <div className={cn(
+            "flex gap-4 font-mono text-[9px] uppercase tracking-widest",
+            isFocusMode ? "opacity-30" : "opacity-60"
+          )}>
+            <span className="hidden sm:inline">UTF-8</span>
+            <span className="text-minimal-accent font-bold">MD</span>
+          </div>
+        </motion.footer>
       </AnimatePresence>
     </div>
   );

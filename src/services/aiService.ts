@@ -1,25 +1,24 @@
-/**
- * AI Service for interacting with the local Ollama instance via server proxy
- */
+import { GoogleGenAI } from "@google/genai";
 
-export type AIAssistantAction = 'improve' | 'fix-grammar' | 'shorten' | 'expand' | 'generate-outline' | 'expand-outline' | 'summarize' | 'suggest-title';
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+export type AIAssistantAction = 'improve' | 'fix-grammar' | 'shorten' | 'expand' | 'generate-outline' | 'expand-outline' | 'summarize' | 'suggest-title' | 'draft-topic';
+
+export interface ChatMessage {
+  role: 'user' | 'model' | 'system';
+  parts: { text: string }[];
+}
 
 const callAiProxy = async (prompt: string, system?: string): Promise<string> => {
-  const response = await fetch('/api/ai/generate', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ prompt, system }),
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: prompt,
+    config: {
+      systemInstruction: system,
+    }
   });
 
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.error || "Failed to generate content");
-  }
-
-  const data = await response.json();
-  return data.text;
+  return response.text || "";
 };
 
 export const processAIAction = async (text: string, action: AIAssistantAction, personalInstructions: string = ""): Promise<string> => {
@@ -34,6 +33,10 @@ export const processAIAction = async (text: string, action: AIAssistantAction, p
     case 'improve':
       systemInstruction += "Improve the quality of the following text while keeping its meaning and general structure.";
       prompt = `Improve this text:\n\n${text}`;
+      break;
+    case 'draft-topic':
+      systemInstruction += "Take the following topic or snippet and draft a detailed, well-structured, and engaging piece of content around it.";
+      prompt = `Draft a detailed piece about this topic:\n\n${text}`;
       break;
     case 'fix-grammar':
       systemInstruction += "Fix any grammar, spelling, or punctuation errors in the following text. Do not change the meaning.";
@@ -84,4 +87,34 @@ Generate only the markdown content.
 `;
 
   return await callAiProxy(prompt, systemInstruction);
+};
+
+export const chatWithAI = async (
+  messages: ChatMessage[], 
+  documentContext: string, 
+  personalInstructions: string = ""
+): Promise<string> => {
+  let systemInstruction = "You are a helpful AI writing partner in Ink & Quill. You help users refine their documents through conversation.";
+  if (personalInstructions) {
+    systemInstruction += ` Always follow these style preferences: "${personalInstructions}".`;
+  }
+  systemInstruction += `\n\nHere is the current document content for context:\n${documentContext}`;
+
+  // Filter out system messages as they are handled via config
+  const contents = messages
+    .filter(m => m.role !== 'system')
+    .map(m => ({
+      role: m.role,
+      parts: m.parts
+    }));
+
+  const response = await ai.models.generateContent({
+    model: "gemini-3.1-pro-preview", // Use pro for better chat reasoning
+    contents,
+    config: {
+      systemInstruction,
+    }
+  });
+
+  return response.text || "";
 };

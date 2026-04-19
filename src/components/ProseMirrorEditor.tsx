@@ -8,7 +8,7 @@ import { baseKeymap, setBlockType, toggleMark } from 'prosemirror-commands';
 import { history, undo, redo } from 'prosemirror-history';
 import { buildInputRules, buildKeymap } from './prose-setup';
 import { highlightPlugin } from './prose-highlight';
-import { defaultMarkdownParser, defaultMarkdownSerializer } from 'prosemirror-markdown';
+import { defaultMarkdownParser, defaultMarkdownSerializer, MarkdownSerializer } from 'prosemirror-markdown';
 import { 
   Bold, 
   Italic, 
@@ -16,6 +16,8 @@ import {
   Code, 
   Quote, 
   Type, 
+  Underline,
+  Strikethrough,
   Sparkles, 
   Wand2, 
   CheckCheck, 
@@ -37,7 +39,35 @@ import { cn } from '../lib/utils';
 import { processAIAction, type AIAssistantAction } from '../services/aiService';
 import { getKrokiUrl } from '../lib/kroki';
 
-// We'll use a slightly customized schema if needed, but prosemirror-markdown's schema is a good start.
+// We'll use a slightly customized schema to support more formatting
+const editorSchema = new Schema({
+  nodes: baseSchema.spec.nodes,
+  marks: baseSchema.spec.marks.append({
+    strike: {
+      parseDOM: [
+        { tag: "s" }, 
+        { tag: "del" }, 
+        { tag: "strike" },
+        { style: "text-decoration=line-through" }
+      ],
+      toDOM() { return ["s", 0] }
+    },
+    underline: {
+      parseDOM: [
+        { tag: "u" }, 
+        { style: "text-decoration=underline" }
+      ],
+      toDOM() { return ["u", 0] }
+    }
+  })
+});
+
+// Custom serializer to handle our new marks
+const editorSerializer = new MarkdownSerializer(defaultMarkdownSerializer.nodes, {
+  ...defaultMarkdownSerializer.marks,
+  strike: { open: "~~", close: "~~", mixable: true, expelEnclosingWhitespace: true },
+  underline: { open: "<u>", close: "</u>", mixable: true }
+});
 
 class UmlNodeView {
   dom: HTMLElement;
@@ -123,6 +153,7 @@ interface Props {
   isTypewriter?: boolean;
   direction?: 'ltr' | 'rtl';
   aiPersonalInstructions?: string;
+  onAiResult?: (result: string) => void;
   searchQuery?: string;
   searchOptions?: {
     isCaseSensitive: boolean;
@@ -152,6 +183,7 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
   isTypewriter, 
   direction = 'ltr', 
   aiPersonalInstructions,
+  onAiResult,
   searchQuery = '',
   searchOptions = { isCaseSensitive: false, isWholeWord: false, searchIndex: -1, currentMatchIndex: 0 }
 }, ref) => {
@@ -268,9 +300,9 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
           "Mod-y": redo,
           "Mod-Shift-z": redo,
         }),
-        keymap(buildKeymap(baseSchema)),
+        keymap(buildKeymap(editorSchema)),
         keymap(baseKeymap),
-        buildInputRules(baseSchema),
+        buildInputRules(editorSchema),
         highlightPlugin,
         typewriterPlugin,
         searchPlugin,
@@ -322,7 +354,7 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
         view.updateState(newState);
         
         if (tr.docChanged && !isUpdatingFromProps.current) {
-          const markdown = defaultMarkdownSerializer.serialize(newState.doc);
+          const markdown = editorSerializer.serialize(newState.doc);
           onChange(markdown);
         }
       },
@@ -346,7 +378,7 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
 
   // Sync value from props if it changes externally (e.g. templates)
   useEffect(() => {
-    if (viewRef.current && value !== defaultMarkdownSerializer.serialize(viewRef.current.state.doc)) {
+    if (viewRef.current && value !== editorSerializer.serialize(viewRef.current.state.doc)) {
       isUpdatingFromProps.current = true;
       const { state } = viewRef.current;
       const tr = state.tr.replaceWith(0, state.doc.content.size, defaultMarkdownParser.parse(value).content);
@@ -458,7 +490,7 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
     },
     getHtml: () => {
       if (!viewRef.current) return '';
-      const fragment = DOMSerializer.fromSchema(baseSchema).serializeFragment(viewRef.current.state.doc.content);
+      const fragment = DOMSerializer.fromSchema(editorSchema).serializeFragment(viewRef.current.state.doc.content);
       const container = document.createElement('div');
       container.appendChild(fragment);
       return container.innerHTML;
@@ -472,13 +504,15 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
     if (!viewRef.current) return;
     const { state, dispatch } = viewRef.current;
     
-    if (type === 'bold') toggleMark(baseSchema.marks.strong)(state, dispatch);
-    if (type === 'italic') toggleMark(baseSchema.marks.em)(state, dispatch);
-    if (type === 'code') toggleMark(baseSchema.marks.code)(state, dispatch);
-    if (type === 'h1') setBlockType(baseSchema.nodes.heading, { level: 1 })(state, dispatch);
-    if (type === 'h2') setBlockType(baseSchema.nodes.heading, { level: 2 })(state, dispatch);
-    if (type === 'h3') setBlockType(baseSchema.nodes.heading, { level: 3 })(state, dispatch);
-    if (type === 'quote') wrapInBlock(baseSchema.nodes.blockquote)(state, dispatch);
+    if (type === 'bold') toggleMark(editorSchema.marks.strong)(state, dispatch);
+    if (type === 'italic') toggleMark(editorSchema.marks.em)(state, dispatch);
+    if (type === 'underline') toggleMark(editorSchema.marks.underline)(state, dispatch);
+    if (type === 'strike') toggleMark(editorSchema.marks.strike)(state, dispatch);
+    if (type === 'code') toggleMark(editorSchema.marks.code)(state, dispatch);
+    if (type === 'h1') setBlockType(editorSchema.nodes.heading, { level: 1 })(state, dispatch);
+    if (type === 'h2') setBlockType(editorSchema.nodes.heading, { level: 2 })(state, dispatch);
+    if (type === 'h3') setBlockType(editorSchema.nodes.heading, { level: 3 })(state, dispatch);
+    if (type === 'quote') wrapInBlock(editorSchema.nodes.blockquote)(state, dispatch);
     
     viewRef.current.focus();
   };
@@ -495,10 +529,14 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
     try {
       const result = await processAIAction(selectedText, action, aiPersonalInstructions);
       
-      const parsed = defaultMarkdownParser.parse(result);
-      const tr = state.tr.replaceWith(from, to, parsed.content);
+      if (onAiResult) {
+        onAiResult(result);
+      } else {
+        const parsed = defaultMarkdownParser.parse(result);
+        const tr = state.tr.replaceWith(from, to, parsed.content);
+        dispatch(tr);
+      }
       
-      dispatch(tr);
       setBubbleMenu(prev => ({ ...prev, show: false }));
       setShowAiPopover(false);
     } catch (error) {
@@ -566,6 +604,20 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
               <Italic className="w-3.5 h-3.5" />
             </button>
             <button
+              onClick={() => handleFormat('underline')}
+              className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
+              title="Underline"
+            >
+              <Underline className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => handleFormat('strike')}
+              className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
+              title="Strikethrough"
+            >
+              <Strikethrough className="w-3.5 h-3.5" />
+            </button>
+            <button
               onClick={() => handleFormat('code')}
               className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
               title="Code"
@@ -603,6 +655,25 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
             </button>
             <div className="w-px h-3 bg-white/20 mx-0.5" />
             
+            <button
+              onClick={() => handleAIAction('improve')}
+              disabled={isProcessingAI}
+              className="p-1.5 hover:bg-minimal-accent/20 text-minimal-accent rounded transition-colors"
+              title="Improve Flow"
+            >
+              <Zap className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => handleAIAction('draft-topic')}
+              disabled={isProcessingAI}
+              className="p-1.5 hover:bg-minimal-accent/20 text-minimal-accent rounded transition-colors"
+              title="Draft Topic"
+            >
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+
+            <div className="w-px h-3 bg-white/20 mx-0.5" />
+
             <div className="relative">
               <button
                 onClick={() => setShowAiPopover(!showAiPopover)}
@@ -657,6 +728,7 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
                       {[
                         { id: 'generate-outline', label: 'Create Outline', icon: Layout },
                         { id: 'expand-outline', label: 'Draft from Outline', icon: Zap },
+                        { id: 'draft-topic', label: 'Draft Topic', icon: ArrowRight },
                         { id: 'summarize', label: 'Summarize', icon: FileText },
                         { id: 'suggest-title', label: 'Suggest Titles', icon: Heading },
                       ].map(item => (

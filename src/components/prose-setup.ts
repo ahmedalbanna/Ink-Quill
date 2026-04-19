@@ -44,6 +44,8 @@ export function buildKeymap(schema: Schema) {
 
   if (schema.marks.strong) bind("Mod-b", toggleMark(schema.marks.strong))
   if (schema.marks.em) bind("Mod-i", toggleMark(schema.marks.em))
+  if (schema.marks.underline) bind("Mod-u", toggleMark(schema.marks.underline))
+  if (schema.marks.strike) bind("Mod-Shift-x", toggleMark(schema.marks.strike))
   if (schema.marks.code) bind("Mod-`", toggleMark(schema.marks.code))
 
   if (schema.nodes.bullet_list) bind("Shift-Ctrl-8", wrapInList(schema.nodes.bullet_list))
