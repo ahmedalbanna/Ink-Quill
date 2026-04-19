@@ -1,22 +1,28 @@
-import { GoogleGenAI } from "@google/genai";
-
-let aiInstance: GoogleGenAI | null = null;
-
-const getAI = () => {
-  if (!aiInstance) {
-    if (!process.env.GEMINI_API_KEY) {
-      throw new Error("GEMINI_API_KEY is not set in the environment.");
-    }
-    aiInstance = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  }
-  return aiInstance;
-};
+/**
+ * AI Service for interacting with the local Ollama instance via server proxy
+ */
 
 export type AIAssistantAction = 'improve' | 'fix-grammar' | 'shorten' | 'expand' | 'tone-professional' | 'tone-casual' | 'tone-creative' | 'generate-outline' | 'expand-outline' | 'summarize' | 'suggest-title';
 
+const callAiProxy = async (prompt: string, system?: string): Promise<string> => {
+  const response = await fetch('/api/ai/generate', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ prompt, system }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || "Failed to generate content");
+  }
+
+  const data = await response.json();
+  return data.text;
+};
+
 export const processAIAction = async (text: string, action: AIAssistantAction, personalInstructions: string = ""): Promise<string> => {
-  const ai = getAI();
-  
   let systemInstruction = "You are a helpful writing assistant. ";
   if (personalInstructions) {
     systemInstruction += `The user has specified these stylistic preferences: "${personalInstructions}". Please adhere to them while performing the action. `;
@@ -73,20 +79,10 @@ export const processAIAction = async (text: string, action: AIAssistantAction, p
       prompt = text;
   }
 
-  const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: prompt,
-    config: {
-      systemInstruction,
-    },
-  });
-
-  return response.text.trim();
+  return await callAiProxy(prompt, systemInstruction);
 };
 
 export const generateContentFromPrompt = async (userInput: string, context: string = "", personalInstructions: string = ""): Promise<string> => {
-  const ai = getAI();
-  
   let systemInstruction = "You are an expert content creator. Generate high-quality Markdown content based on the user's prompt. If context is provided, ensure your response fits naturally within it.";
   if (personalInstructions) {
     systemInstruction += ` Important User Preferences to follow: "${personalInstructions}".`;
@@ -99,13 +95,5 @@ Existing context: ${context}
 Generate only the markdown content.
 `;
 
-  const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: prompt,
-    config: {
-      systemInstruction,
-    },
-  });
-
-  return response.text.trim();
+  return await callAiProxy(prompt, systemInstruction);
 };

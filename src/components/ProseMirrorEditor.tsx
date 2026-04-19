@@ -31,7 +31,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
-import { processAIAction, type AIAssistantAction } from '../services/geminiService';
+import { processAIAction, type AIAssistantAction } from '../services/aiService';
 import { getKrokiUrl } from '../lib/kroki';
 
 // We'll use a slightly customized schema if needed, but prosemirror-markdown's schema is a good start.
@@ -118,6 +118,7 @@ interface Props {
   className?: string;
   placeholder?: string;
   isTypewriter?: boolean;
+  direction?: 'ltr' | 'rtl';
   aiPersonalInstructions?: string;
 }
 
@@ -125,9 +126,13 @@ export interface EditorRef {
   focus: () => void;
   insertText: (before: string, after?: string) => void;
   insertImage: (src: string, alt?: string, title?: string) => void;
+  appendMarkdown: (markdown: string) => void;
+  replaceSelectionWithMarkdown: (markdown: string) => void;
+  getSelectedText: () => string;
+  getHtml: () => string;
 }
 
-const ProseMirrorEditor = forwardRef<EditorRef, Props>(({ value, onChange, onKeyDown, className, placeholder, isTypewriter, aiPersonalInstructions }, ref) => {
+const ProseMirrorEditor = forwardRef<EditorRef, Props>(({ value, onChange, onKeyDown, className, placeholder, isTypewriter, direction = 'ltr', aiPersonalInstructions }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -216,6 +221,7 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({ value, onChange, onKey
       attributes: {
         class: cn("ProseMirror", isTypewriter && "typewriter-mode"),
         "data-placeholder": placeholder || "Start writing...",
+        dir: direction,
       },
       nodeViews: {
         code_block(node, view, getPos) {
@@ -263,6 +269,19 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({ value, onChange, onKey
     }
   }, [value]);
 
+  // Sync direction
+  useEffect(() => {
+    if (viewRef.current) {
+      viewRef.current.setProps({
+        attributes: {
+          class: cn("ProseMirror", isTypewriter && "typewriter-mode"),
+          "data-placeholder": placeholder || "Start writing...",
+          dir: direction,
+        }
+      });
+    }
+  }, [direction, isTypewriter, placeholder]);
+
   useImperativeHandle(ref, () => ({
     focus: () => {
       viewRef.current?.focus();
@@ -287,6 +306,36 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({ value, onChange, onKey
       const node = baseSchema.nodes.image.create({ src, alt, title });
       const tr = state.tr.insert(from, node);
       dispatch(tr);
+    },
+    appendMarkdown: (content: string) => {
+      if (!viewRef.current) return;
+      const { state, dispatch } = viewRef.current;
+      const parsed = defaultMarkdownParser.parse(content);
+      const tr = state.tr.insert(state.doc.content.size, parsed.content);
+      dispatch(tr);
+      viewRef.current.focus();
+    },
+    replaceSelectionWithMarkdown: (content: string) => {
+      if (!viewRef.current) return;
+      const { state, dispatch } = viewRef.current;
+      const { from, to } = state.selection;
+      const parsed = defaultMarkdownParser.parse(content);
+      const tr = state.tr.replaceWith(from, to, parsed.content);
+      dispatch(tr);
+      viewRef.current.focus();
+    },
+    getSelectedText: () => {
+      if (!viewRef.current) return '';
+      const { state } = viewRef.current;
+      const { from, to } = state.selection;
+      return state.doc.textBetween(from, to, ' ');
+    },
+    getHtml: () => {
+      if (!viewRef.current) return '';
+      const fragment = DOMSerializer.fromSchema(baseSchema).serializeFragment(viewRef.current.state.doc.content);
+      const container = document.createElement('div');
+      container.appendChild(fragment);
+      return container.innerHTML;
     }
   }));
 
@@ -432,7 +481,7 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({ value, onChange, onKey
                     exit={{ opacity: 0, y: -10 }}
                     className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-zinc-900 border border-zinc-700/50 rounded-xl shadow-2xl p-2 flex flex-col gap-1 w-48"
                   >
-                    <div className="flex flex-col gap-1 max-h-[300px] overflow-y-auto pr-1 custom-scrollbar">
+                    <div className="flex flex-col gap-1 max-h-[300px] overflow-y-auto pe-1 custom-scrollbar">
                       <div className="px-2 py-1.5 text-[9px] font-bold text-zinc-500 uppercase tracking-widest bg-zinc-800/50 rounded-t-lg mb-1">Editing</div>
                       {[
                         { id: 'improve', label: 'Improve Writing', icon: Wand2 },

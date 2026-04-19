@@ -48,9 +48,9 @@
   color: var(--minimal-text);
 }
 
-.markdown-body ul { @apply list-disc pl-8 mb-6 space-y-2; }
-.markdown-body ol { @apply list-decimal pl-8 mb-6 space-y-2; }
-.markdown-body li { @apply pl-2 font-medium; }
+.markdown-body ul { @apply list-disc ps-8 mb-6 space-y-2; }
+.markdown-body ol { @apply list-decimal ps-8 mb-6 space-y-2; }
+.markdown-body li { @apply ps-2 font-medium; }
 
 .markdown-body code { 
   @apply bg-minimal-accent/5 px-2 py-0.5 rounded border border-minimal-accent/20 font-mono text-sm text-minimal-accent font-semibold transition-colors hover:bg-minimal-accent/10; 
@@ -74,7 +74,7 @@
   @apply w-full border-collapse my-10 overflow-hidden rounded-lg border-2 border-minimal-border shadow-sm; 
 }
 .markdown-body th, .markdown-body td { 
-  @apply border border-minimal-border p-4 text-left; 
+  @apply border border-minimal-border p-4 text-start; 
 }
 .markdown-body th { 
   @apply bg-minimal-sidebar font-bold text-minimal-text border-b-2 border-minimal-border; 
@@ -97,22 +97,28 @@
   font-family: var(--minimal-font);
   white-space: pre-wrap;
   word-wrap: break-word;
-  padding: 40px 60px;
+  padding: 24px 20px;
+}
+
+@media (min-width: 768px) {
+  .ProseMirror {
+    padding: 40px 60px;
+  }
 }
 
 .ProseMirror p { @apply mb-6 leading-loose text-[16px]; color: var(--minimal-text); }
 .ProseMirror h1 { @apply text-minimal-text mt-12 mb-8 font-extrabold tracking-tight border-b-2 border-minimal-border pb-4; font-size: 42px; }
 .ProseMirror h2 { @apply text-minimal-text mt-16 mb-6 font-bold tracking-tight border-b border-minimal-border/50 pb-2; font-size: 30px; }
 .ProseMirror h3 { @apply text-minimal-text mt-10 mb-4 font-bold; font-size: 24px; }
-.ProseMirror ul { @apply list-disc pl-8 mb-6 space-y-2; }
-.ProseMirror ol { @apply list-decimal pl-8 mb-6 space-y-2; }
-.ProseMirror li { @apply pl-2 font-medium; }
+.ProseMirror ul { @apply list-disc ps-8 mb-6 space-y-2; }
+.ProseMirror ol { @apply list-decimal ps-8 mb-6 space-y-2; }
+.ProseMirror li { @apply ps-2 font-medium; }
 .ProseMirror img { @apply max-w-full h-auto rounded-xl shadow-md my-8 border border-minimal-border block mx-auto; }
-.ProseMirror blockquote { @apply border-l-8 border-minimal-accent/30 bg-minimal-sidebar/50 pl-6 py-4 italic text-zinc-500 my-8 rounded-r-lg; }
+.ProseMirror blockquote { @apply border-s-8 border-minimal-accent/30 bg-minimal-sidebar/50 ps-6 py-4 italic text-zinc-500 my-8 rounded-e-lg; }
 .ProseMirror pre { @apply bg-zinc-900 shadow-2xl text-zinc-100 p-8 rounded-2xl my-10 overflow-x-auto font-mono text-[13px] leading-relaxed border border-zinc-700/50 relative; background-image: linear-gradient(to bottom right, rgba(255,255,255,0.05), transparent); }
 .ProseMirror pre[data-language]::before {
   content: attr(data-language);
-  @apply absolute top-0 right-6 px-3 py-1 bg-zinc-800 text-[10px] font-bold text-zinc-400 uppercase rounded-b border border-t-0 border-zinc-700/50 tracking-widest;
+  @apply absolute top-0 end-6 px-3 py-1 bg-zinc-800 text-[10px] font-bold text-zinc-400 uppercase rounded-b border border-t-0 border-zinc-700/50 tracking-widest;
 }
 .ProseMirror code { @apply bg-minimal-accent/5 px-2 py-0.5 rounded border border-minimal-accent/20 font-mono text-sm text-minimal-accent font-semibold transition-colors hover:bg-minimal-accent/10; }
 
