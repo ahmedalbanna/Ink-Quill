@@ -1,6 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const DEFAULT_MODEL = 'mistral';
 
 export type AIAssistantAction = 'improve' | 'fix-grammar' | 'shorten' | 'expand' | 'generate-outline' | 'expand-outline' | 'summarize' | 'suggest-title' | 'draft-topic';
 
@@ -9,19 +7,76 @@ export interface ChatMessage {
   parts: { text: string }[];
 }
 
-const callAiProxy = async (prompt: string, system?: string): Promise<string> => {
-  const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: prompt,
-    config: {
-      systemInstruction: system,
-    }
-  });
-
-  return response.text || "";
+export const checkOllamaConnection = async (selectedModel?: string): Promise<{ success: boolean; model?: string; allModels: string[]; error?: string }> => {
+  try {
+    const response = await fetch(`/api/ai/tags`);
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    const data = await response.json();
+    const models = data.models?.map((m: any) => m.name) || [];
+    const modelToUse = selectedModel && models.includes(selectedModel) ? selectedModel : (models[0] || "None");
+    
+    return { 
+      success: true, 
+      model: modelToUse,
+      allModels: models
+    };
+  } catch (error) {
+    return { success: false, allModels: [], error: error instanceof Error ? error.message : String(error) };
+  }
 };
 
-export const processAIAction = async (text: string, action: AIAssistantAction, personalInstructions: string = ""): Promise<string> => {
+const callAiProxy = async (prompt: string, system?: string, model: string = 'mistral', onChunk?: (chunk: string) => void): Promise<string> => {
+  try {
+    const response = await fetch(`/api/ai/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: model,
+        prompt: prompt,
+        system: system,
+        stream: !!onChunk
+      })
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.error || response.statusText);
+    }
+
+    if (onChunk) {
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let fullContent = "";
+      
+      while (true) {
+        const { done, value } = await reader!.read();
+        if (done) break;
+        
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const data = JSON.parse(line);
+            if (data.response) {
+              fullContent += data.response;
+              onChunk(data.response);
+            }
+          } catch (e) {}
+        }
+      }
+      return fullContent;
+    } else {
+      const data = await response.json();
+      return data.response || "";
+    }
+  } catch (error) {
+    console.error("AI Proxy Error:", error);
+    return `Error: ${error instanceof Error ? error.message : "Unable to reach AI service."}`;
+  }
+};
+
+export const processAIAction = async (text: string, action: AIAssistantAction, personalInstructions: string = "", model: string = 'mistral', onChunk?: (chunk: string) => void): Promise<string> => {
   let systemInstruction = "You are a helpful writing assistant. ";
   if (personalInstructions) {
     systemInstruction += `The user has specified these stylistic preferences: "${personalInstructions}". Please adhere to them while performing the action. `;
@@ -70,10 +125,10 @@ export const processAIAction = async (text: string, action: AIAssistantAction, p
       prompt = text;
   }
 
-  return await callAiProxy(prompt, systemInstruction);
+  return await callAiProxy(prompt, systemInstruction, model, onChunk);
 };
 
-export const generateContentFromPrompt = async (userInput: string, context: string = "", personalInstructions: string = ""): Promise<string> => {
+export const generateContentFromPrompt = async (userInput: string, context: string = "", personalInstructions: string = "", model: string = 'mistral', onChunk?: (chunk: string) => void): Promise<string> => {
   let systemInstruction = "You are an expert content creator. Generate high-quality Markdown content based on the user's prompt. If context is provided, ensure your response fits naturally within it.";
   if (personalInstructions) {
     systemInstruction += ` Important User Preferences to follow: "${personalInstructions}".`;
@@ -86,13 +141,15 @@ Existing context: ${context}
 Generate only the markdown content.
 `;
 
-  return await callAiProxy(prompt, systemInstruction);
+  return await callAiProxy(prompt, systemInstruction, model, onChunk);
 };
 
 export const chatWithAI = async (
   messages: ChatMessage[], 
   documentContext: string, 
-  personalInstructions: string = ""
+  personalInstructions: string = "",
+  model: string = 'mistral',
+  onChunk?: (chunk: string) => void
 ): Promise<string> => {
   let systemInstruction = "You are a helpful AI writing partner in Ink & Quill. You help users refine their documents through conversation.";
   if (personalInstructions) {
@@ -100,21 +157,59 @@ export const chatWithAI = async (
   }
   systemInstruction += `\n\nHere is the current document content for context:\n${documentContext}`;
 
-  // Filter out system messages as they are handled via config
-  const contents = messages
-    .filter(m => m.role !== 'system')
-    .map(m => ({
-      role: m.role,
-      parts: m.parts
-    }));
+  const formattedMessages = [
+    { role: 'system', content: systemInstruction },
+    ...messages.filter(m => m.role !== 'system').map(m => ({
+      role: m.role === 'model' ? 'assistant' : m.role,
+      content: m.parts[0].text
+    }))
+  ];
 
-  const response = await ai.models.generateContent({
-    model: "gemini-3.1-pro-preview", // Use pro for better chat reasoning
-    contents,
-    config: {
-      systemInstruction,
+  try {
+    const response = await fetch(`/api/ai/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: model,
+        messages: formattedMessages,
+        stream: !!onChunk
+      })
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.error || response.statusText);
     }
-  });
 
-  return response.text || "";
+    if (onChunk) {
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let fullContent = "";
+      
+      while (true) {
+        const { done, value } = await reader!.read();
+        if (done) break;
+        
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const data = JSON.parse(line);
+            if (data.message?.content) {
+              fullContent += data.message.content;
+              onChunk(data.message.content);
+            }
+          } catch (e) {}
+        }
+      }
+      return fullContent;
+    } else {
+      const data = await response.json();
+      return data.message?.content || "";
+    }
+  } catch (error) {
+    console.error("AI Proxy Chat Error:", error);
+    return `Error: ${error instanceof Error ? error.message : "Unable to reach AI service."}`;
+  }
 };

@@ -153,7 +153,10 @@ interface Props {
   isTypewriter?: boolean;
   direction?: 'ltr' | 'rtl';
   aiPersonalInstructions?: string;
+  selectedModel?: string;
   onAiResult?: (result: string) => void;
+  onAiStream?: (chunk: string) => void;
+  onImageUploadRequest?: () => void;
   searchQuery?: string;
   searchOptions?: {
     isCaseSensitive: boolean;
@@ -183,7 +186,10 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
   isTypewriter, 
   direction = 'ltr', 
   aiPersonalInstructions,
+  selectedModel = 'mistral',
   onAiResult,
+  onAiStream,
+  onImageUploadRequest,
   searchQuery = '',
   searchOptions = { isCaseSensitive: false, isWholeWord: false, searchIndex: -1, currentMatchIndex: 0 }
 }, ref) => {
@@ -527,7 +533,17 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
 
     setIsProcessingAI(true);
     try {
-      const result = await processAIAction(selectedText, action, aiPersonalInstructions);
+      const result = await processAIAction(
+        selectedText, 
+        action, 
+        aiPersonalInstructions, 
+        selectedModel,
+        (chunk) => {
+          if (onAiStream) {
+            onAiStream(chunk);
+          }
+        }
+      );
       
       if (onAiResult) {
         onAiResult(result);
@@ -640,12 +656,16 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
             </button>
             <button
               onClick={() => {
-                const url = window.prompt("Enter Image URL:");
-                if (url && viewRef.current) {
-                  const { state, dispatch } = viewRef.current;
-                  const { from } = state.selection;
-                  const node = baseSchema.nodes.image.create({ src: url, alt: "Image" });
-                  dispatch(state.tr.insert(from, node));
+                if (onImageUploadRequest) {
+                  onImageUploadRequest();
+                } else {
+                  const url = window.prompt("Enter Image URL:");
+                  if (url && viewRef.current) {
+                    const { state, dispatch } = viewRef.current;
+                    const { from } = state.selection;
+                    const node = baseSchema.nodes.image.create({ src: url, alt: "Image" });
+                    dispatch(state.tr.insert(from, node));
+                  }
                 }
               }}
               className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"

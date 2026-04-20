@@ -32,12 +32,15 @@ import {
   Heading2,
   Heading3,
   Settings,
+  History,
+  Underline,
+  Strikethrough as Stroke
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Markdown from 'react-markdown';
 import { cn } from './lib/utils';
 import ProseMirrorEditor, { EditorRef } from './components/ProseMirrorEditor';
-import { generateContentFromPrompt, processAIAction, chatWithAI, type ChatMessage } from './services/aiService';
+import { generateContentFromPrompt, processAIAction, chatWithAI, checkOllamaConnection, type ChatMessage } from './services/aiService';
 
 const DEFAULT_MARKDOWN = `# Welcome to Ink & Quill
 
@@ -78,6 +81,10 @@ export default function App() {
     return saved !== null ? saved : DEFAULT_MARKDOWN;
   });
   const [showAiAssistant, setShowAiAssistant] = useState(false);
+  const [snapshots, setSnapshots] = useState<{ id: string; timestamp: number; content: string }[]>(() => {
+    const saved = localStorage.getItem('ink-quill-snapshots');
+    return saved ? JSON.parse(saved) : [];
+  });
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiResult, setAiResult] = useState<string | null>(null);
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
@@ -100,8 +107,18 @@ export default function App() {
     return localStorage.getItem('ink-quill-ai-prefs') || "";
   });
   const [showAiSettings, setShowAiSettings] = useState(false);
+  const [selectedModel, setSelectedModel] = useState<string>(() => {
+    return localStorage.getItem('ink-quill-ai-model') || 'mistral';
+  });
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [ollamaStatus, setOllamaStatus] = useState<{ loading: boolean; connected: boolean; model: string; error?: string }>({
+    loading: false,
+    connected: false,
+    model: ''
+  });
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (chatScrollRef.current) {
@@ -112,6 +129,27 @@ export default function App() {
     const saved = localStorage.getItem('ink-quill-goal');
     return saved ? parseInt(saved) : 0;
   });
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      alert("Please upload an image file.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      if (dataUrl) {
+        editorRef.current?.insertImage(dataUrl, file.name);
+      }
+    };
+    reader.readAsDataURL(file);
+    
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
   const [showSettings, setShowSettings] = useState(false);
   const editorRef = useRef<EditorRef>(null);
 
@@ -138,6 +176,14 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('ink-quill-ai-prefs', aiPersonalInstructions);
   }, [aiPersonalInstructions]);
+
+  useEffect(() => {
+    localStorage.setItem('ink-quill-ai-model', selectedModel);
+  }, [selectedModel]);
+
+  useEffect(() => {
+    localStorage.setItem('ink-quill-snapshots', JSON.stringify(snapshots));
+  }, [snapshots]);
 
   useEffect(() => {
     // Apply standard brand colors and font to CSS variables
@@ -280,24 +326,57 @@ export default function App() {
     }
   };
 
+  const takeSnapshot = () => {
+    const newSnapshot = {
+      id: Math.random().toString(36).substr(2, 9),
+      timestamp: Date.now(),
+      content: markdown
+    };
+    setSnapshots(prev => [newSnapshot, ...prev].slice(0, 5)); // Keep last 5
+    alert("Snapshot saved successfully.");
+  };
+
   const handleAiGenerate = async () => {
     if (!aiPrompt.trim()) return;
     
     const userMessage: ChatMessage = { role: 'user', parts: [{ text: aiPrompt }] };
-    const newHistory = [...chatHistory, userMessage];
-    setChatHistory(newHistory);
+    const historyWithUser = [...chatHistory, userMessage];
+    setChatHistory(historyWithUser);
     setAiPrompt('');
     setIsGeneratingAi(true);
     setAiResult(null);
 
+    // Add placeholder for streaming response
+    setChatHistory(prev => [...prev, { role: 'model', parts: [{ text: '' }] }]);
+
     try {
-      const response = await chatWithAI(newHistory, markdown, aiPersonalInstructions);
-      const modelMessage: ChatMessage = { role: 'model', parts: [{ text: response }] };
-      setChatHistory(prev => [...prev, modelMessage]);
+      let fullResponse = "";
+      const response = await chatWithAI(
+        historyWithUser, 
+        markdown, 
+        aiPersonalInstructions, 
+        selectedModel,
+        (chunk) => {
+          fullResponse += chunk;
+          setChatHistory(prev => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last && last.role === 'model') {
+              next[next.length - 1] = { ...last, parts: [{ text: fullResponse }] };
+            }
+            return next;
+          });
+        }
+      );
       setAiResult(response);
     } catch (error) {
       console.error("AI Generation failed:", error);
-      alert("AI Generation failed. Check console.");
+      const errorMessage = `Error: ${error instanceof Error ? error.message : String(error)}`;
+      setChatHistory(prev => {
+        const next = [...prev];
+        next[next.length - 1] = { role: 'model', parts: [{ text: errorMessage }] };
+        return next;
+      });
     } finally {
       setIsGeneratingAi(false);
     }
@@ -326,6 +405,26 @@ export default function App() {
     setShowAiAssistant(false);
   };
 
+  useEffect(() => {
+    if (showAiAssistant) {
+      setOllamaStatus(prev => ({ ...prev, loading: true }));
+      checkOllamaConnection(selectedModel).then(res => {
+        setOllamaStatus({
+          loading: false,
+          connected: res.success,
+          model: res.model || '',
+          error: res.error
+        });
+        if (res.allModels) {
+          setAvailableModels(res.allModels);
+          if (res.model && res.model !== selectedModel) {
+            setSelectedModel(res.model);
+          }
+        }
+      });
+    }
+  }, [showAiAssistant, selectedModel]);
+
   const toolbarButtons = [
     { icon: Heading1, label: 'Heading 1', action: () => editorRef.current?.handleFormat('h1') },
     { icon: Heading2, label: 'Heading 2', action: () => editorRef.current?.handleFormat('h2') },
@@ -337,9 +436,14 @@ export default function App() {
     { icon: List, label: 'Unordered List', action: () => insertText('- ') },
     { icon: ListOrdered, label: 'Ordered List', action: () => insertText('1. ') },
     { icon: ImageIcon, label: 'Image', action: () => {
-      const url = window.prompt("Enter Image URL:");
-      if (url) {
-        editorRef.current?.insertImage(url, "Image Alternative Text");
+      const choice = window.confirm("Click OK to Upload an image, or Cancel to provide a URL.");
+      if (choice) {
+        fileInputRef.current?.click();
+      } else {
+        const url = window.prompt("Enter Image URL:");
+        if (url) {
+          editorRef.current?.insertImage(url, "Image Alternative Text");
+        }
       }
     }},
   ];
@@ -357,6 +461,13 @@ export default function App() {
         isFocusMode && "overflow-hidden"
       )}
     >
+      <input 
+        type="file" 
+        ref={fileInputRef} 
+        className="hidden" 
+        accept="image/*" 
+        onChange={handleImageUpload} 
+      />
       {/* Header / Toolbar - Removed as requested */}
 
       {/* Mobile Menu Sidebar */}
@@ -440,7 +551,16 @@ export default function App() {
                   </div>
                   <div>
                     <h2 className="text-sm font-bold text-minimal-text uppercase tracking-widest leading-none">AI Assistant</h2>
-                    <p className="text-[10px] text-minimal-muted font-medium mt-1">Converse & Refine</p>
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <div className={cn(
+                        "w-1.5 h-1.5 rounded-full",
+                        ollamaStatus.loading ? "bg-zinc-300 animate-pulse" : 
+                        ollamaStatus.connected ? "bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]" : "bg-red-500"
+                      )} />
+                      <p className="text-[9px] text-minimal-muted font-bold uppercase tracking-tight">
+                        {ollamaStatus.loading ? "Verifying..." : ollamaStatus.connected ? `Live: ${ollamaStatus.model}` : "Server Offline"}
+                      </p>
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
@@ -473,7 +593,30 @@ export default function App() {
                       className="overflow-hidden border-b border-minimal-border bg-white"
                     >
                       <div className="p-4 space-y-4">
-                         <div className="flex items-center justify-between">
+                         {/* Model Selection */}
+                         <div className="space-y-2">
+                           <h3 className="text-[10px] font-bold text-minimal-muted uppercase tracking-wider">AI Model Selection</h3>
+                           <div className="relative group/model">
+                             <select
+                               value={selectedModel}
+                               onChange={(e) => setSelectedModel(e.target.value)}
+                               className="w-full bg-zinc-50 border border-minimal-border rounded-xl p-3 text-xs font-bold text-minimal-text outline-none focus:border-minimal-accent appearance-none cursor-pointer group-hover/model:border-minimal-accent/50 transition-all uppercase tracking-wide px-4"
+                             >
+                               {availableModels.length > 0 ? (
+                                 availableModels.map(model => (
+                                   <option key={model} value={model}>{model}</option>
+                                 ))
+                               ) : (
+                                 <option value={selectedModel}>{selectedModel} (Loading...)</option>
+                               )}
+                             </select>
+                             <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-minimal-muted">
+                               <ChevronDown className="w-3.5 h-3.5" />
+                             </div>
+                           </div>
+                         </div>
+
+                         <div className="flex items-center justify-between pt-2 border-t border-minimal-border/50">
                            <h3 className="text-[10px] font-bold text-minimal-muted uppercase tracking-wider">Refinement Preferences</h3>
                            <button 
                               onClick={() => setAiPersonalInstructions("")}
@@ -774,6 +917,59 @@ export default function App() {
             >
               <Trash2 className="w-5 h-5" />
             </motion.button>
+
+            {/* Snapshots Button */}
+            <div className="relative group/snapshots">
+              <motion.button
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 0.5, x: 0 }}
+                whileHover={{ opacity: 1, scale: 1.05 }}
+                className="p-3.5 bg-white/90 backdrop-blur border border-minimal-border rounded-full shadow-2xl text-minimal-muted transition-all duration-300"
+                title="Document Snapshots"
+              >
+                <History className="w-5 h-5" />
+              </motion.button>
+              
+              <div className="absolute right-full mr-4 top-0 hidden group-hover/snapshots:flex flex-col gap-1 w-48 bg-white border border-minimal-border rounded-2xl shadow-2xl p-2 z-[60]">
+                <div className="px-3 py-1.5 border-b border-minimal-border flex items-center justify-between">
+                   <span className="text-[9px] font-bold text-minimal-muted uppercase tracking-widest">Snapshots</span>
+                   <button onClick={takeSnapshot} className="p-1 hover:bg-minimal-accent/10 rounded-lg group/plus">
+                      <Plus className="w-3 h-3 text-minimal-accent group-hover/plus:rotate-90 transition-transform" />
+                   </button>
+                </div>
+                <div className="max-h-48 overflow-y-auto p-1 py-1.5 space-y-1">
+                  {snapshots.length === 0 ? (
+                    <p className="text-[9px] text-center text-minimal-muted/50 py-4 italic font-medium">No snapshots yet</p>
+                  ) : (
+                    snapshots.map(s => (
+                      <button
+                        key={s.id}
+                        onClick={() => {
+                          if (window.confirm("Restore this version? Your current work will be overwritten.")) {
+                            setMarkdown(s.content);
+                          }
+                        }}
+                        className="w-full text-left p-2 hover:bg-zinc-50 rounded-xl transition-all border border-transparent hover:border-minimal-border group/s"
+                      >
+                        <div className="flex justify-between items-center mb-0.5">
+                           <span className="text-[10px] font-bold text-minimal-text">{new Date(s.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                           <button 
+                             onClick={(e) => {
+                               e.stopPropagation();
+                               setSnapshots(prev => prev.filter(snap => snap.id !== s.id));
+                             }}
+                             className="opacity-0 group-hover/s:opacity-100 p-1 hover:text-red-500 transition-all"
+                           >
+                             <X className="w-2.5 h-2.5" />
+                           </button>
+                        </div>
+                        <p className="text-[8px] text-minimal-muted truncate">{s.content.substring(0, 40)}...</p>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         )}
         <div className={cn(
@@ -889,9 +1085,25 @@ export default function App() {
             isTypewriter={isTypewriterMode}
             direction={direction}
             aiPersonalInstructions={aiPersonalInstructions}
+            selectedModel={selectedModel}
             onAiResult={(result) => {
               setAiResult(result);
               setShowAiAssistant(true);
+            }}
+            onAiStream={(chunk) => {
+              setAiResult(prev => (prev || '') + chunk);
+              setShowAiAssistant(true);
+            }}
+            onImageUploadRequest={() => {
+              const choice = window.confirm("Click OK to Upload an image, or Cancel to provide a URL.");
+              if (choice) {
+                fileInputRef.current?.click();
+              } else {
+                const url = window.prompt("Enter Image URL:");
+                if (url) {
+                  editorRef.current?.insertImage(url, "Image Alternative Text");
+                }
+              }
             }}
             searchQuery={showSearch ? findText : ''}
             searchOptions={{ isCaseSensitive, isWholeWord, searchIndex, currentMatchIndex }}
@@ -943,9 +1155,15 @@ export default function App() {
             )}
           </div>
           <div className={cn(
-            "flex gap-4 font-mono text-[9px] uppercase tracking-widest",
+            "flex gap-4 font-mono text-[9px] uppercase tracking-widest items-center",
             isFocusMode ? "opacity-30" : "opacity-60"
           )}>
+            {ollamaStatus.connected && (
+              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-green-500/10 text-green-600 border border-green-500/20">
+                <div className="w-1 h-1 rounded-full bg-green-500 animate-pulse" />
+                <span>{ollamaStatus.model}</span>
+              </div>
+            )}
             <span className="hidden sm:inline">UTF-8</span>
             <span className="text-minimal-accent font-bold">MD</span>
           </div>

@@ -16,33 +16,110 @@ async function startServer() {
   app.use(express.json());
 
   const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://185.190.140.93:11434";
-  const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "llama3";
+  const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "gemma:2b";
+
+  // AI Tags Proxy (Connection check)
+  app.get("/api/ai/tags", async (req, res) => {
+    try {
+      const response = await fetch(`${OLLAMA_HOST}/api/tags`, {
+        signal: AbortSignal.timeout(5000)
+      });
+      if (!response.ok) throw new Error(`Ollama tags error: ${response.statusText}`);
+      const data = await response.json();
+      res.json(data);
+    } catch (error) {
+      console.error("AI Tags Error:", error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  // AI Chat Proxy
+  app.post("/api/ai/chat", async (req, res) => {
+    try {
+      const { messages, model, stream = true } = req.body;
+      const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: model || OLLAMA_MODEL,
+          messages: messages,
+          stream: stream,
+        }),
+        signal: AbortSignal.timeout(300000) // 5 minutes for streaming
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Ollama chat error: ${response.status} - ${errorText}`);
+      }
+
+      if (stream) {
+        res.setHeader('Content-Type', 'application/x-ndjson');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+
+        const reader = (response.body as any).getReader();
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            res.write(value);
+          }
+        } finally {
+          reader.releaseLock();
+          res.end();
+        }
+      } else {
+        const data = await response.json();
+        res.json(data);
+      }
+    } catch (error) {
+      console.error("AI Chat Error:", error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
 
   // AI Generation proxy
   app.post("/api/ai/generate", async (req, res) => {
     try {
-      const { prompt, system } = req.body;
-      
-      const fullPrompt = system ? `${system}\n\n${prompt}` : prompt;
-
+      const { prompt, system, model, stream = true } = req.body;
       const response = await fetch(`${OLLAMA_HOST}/api/generate`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: OLLAMA_MODEL,
-          prompt: fullPrompt,
-          stream: false,
+          model: model || OLLAMA_MODEL,
+          prompt: prompt,
+          system: system,
+          stream: stream,
         }),
+        signal: AbortSignal.timeout(300000) // 5 minutes for streaming
       });
 
       if (!response.ok) {
-        throw new Error(`Ollama error: ${response.statusText}`);
+        const errorText = await response.text();
+        throw new Error(`Ollama generation error: ${response.status} - ${errorText}`);
       }
 
-      const data = await response.json();
-      res.json({ text: data.response });
+      if (stream) {
+        res.setHeader('Content-Type', 'application/x-ndjson');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+
+        const reader = (response.body as any).getReader();
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            res.write(value);
+          }
+        } finally {
+          reader.releaseLock();
+          res.end();
+        }
+      } else {
+        const data = await response.json();
+        res.json(data);
+      }
     } catch (error) {
       console.error("AI Generation Error:", error);
       res.status(500).json({ error: (error as Error).message });
