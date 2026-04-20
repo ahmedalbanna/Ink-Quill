@@ -34,7 +34,11 @@ import {
   Settings,
   History,
   Underline,
-  Strikethrough as Stroke
+  Strikethrough as Stroke,
+  Save,
+  Download,
+  ImagePlus,
+  FolderOpen
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Markdown from 'react-markdown';
@@ -119,6 +123,14 @@ export default function App() {
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const chatImageInputRef = useRef<HTMLInputElement>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
+  const [chatAttachedImages, setChatAttachedImages] = useState<string[]>([]);
+  const [savedChats, setSavedChats] = useState<{ id: string; name: string; history: ChatMessage[]; timestamp: number }[]>(() => {
+    const saved = localStorage.getItem('ink-quill-saved-chats');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [showSavedConversations, setShowSavedConversations] = useState(false);
 
   useEffect(() => {
     if (chatScrollRef.current) {
@@ -149,6 +161,111 @@ export default function App() {
     reader.readAsDataURL(file);
     
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleChatImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    Array.from(files).forEach(file => {
+      if (!file.type.startsWith('image/')) return;
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const dataUrl = event.target?.result as string;
+        if (dataUrl) {
+          setChatAttachedImages(prev => [...prev, dataUrl]);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+    if (chatImageInputRef.current) chatImageInputRef.current.value = '';
+  };
+
+  const saveCurrentChat = () => {
+    if (chatHistory.length === 0) return;
+    const name = window.prompt("Enter a name for this conversation:", `Chat ${new Date().toLocaleString()}`);
+    if (!name) return;
+
+    const newChat = {
+      id: Math.random().toString(36).substr(2, 9),
+      name,
+      history: chatHistory,
+      timestamp: Date.now()
+    };
+
+    const updated = [newChat, ...savedChats];
+    setSavedChats(updated);
+    localStorage.setItem('ink-quill-saved-chats', JSON.stringify(updated));
+    alert("Conversation saved successfully.");
+  };
+
+  const loadChat = (chat: any) => {
+    setChatHistory(chat.history);
+    setShowSavedConversations(false);
+  };
+
+  const deleteSavedChat = (id: string) => {
+    if (!window.confirm("Are you sure you want to delete this saved conversation?")) return;
+    const updated = savedChats.filter(c => c.id !== id);
+    setSavedChats(updated);
+    localStorage.setItem('ink-quill-saved-chats', JSON.stringify(updated));
+  };
+
+  const exportChat = (history: ChatMessage[], format: 'json' | 'md') => {
+    let content = "";
+    let filename = `chat-export-${Date.now()}`;
+    
+    if (format === 'json') {
+      content = JSON.stringify(history, null, 2);
+      filename += ".json";
+    } else {
+      content = history.map(m => `### ${m.role.toUpperCase()}\n\n${m.parts[0].text}`).join('\n\n---\n\n');
+      filename += ".md";
+    }
+
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const formatChatInput = (type: 'bold' | 'italic' | 'list') => {
+    if (!chatInputRef.current) return;
+    const { selectionStart, selectionEnd } = chatInputRef.current;
+    const text = aiPrompt;
+    const selected = text.substring(selectionStart, selectionEnd);
+    let formatted = "";
+    let cursorOffset = 0;
+
+    switch (type) {
+      case 'bold':
+        formatted = `**${selected}**`;
+        cursorOffset = 2;
+        break;
+      case 'italic':
+        formatted = `*${selected}*`;
+        cursorOffset = 1;
+        break;
+      case 'list':
+        formatted = `\n- ${selected}`;
+        cursorOffset = 3;
+        break;
+    }
+
+    const newText = text.substring(0, selectionStart) + formatted + text.substring(selectionEnd);
+    setAiPrompt(newText);
+    
+    // Reset focus and selection
+    setTimeout(() => {
+      if (chatInputRef.current) {
+        chatInputRef.current.focus();
+        const newPos = selectionStart + cursorOffset + (selected ? selected.length : 0);
+        chatInputRef.current.setSelectionRange(newPos, newPos);
+      }
+    }, 0);
   };
   const [showSettings, setShowSettings] = useState(false);
   const editorRef = useRef<EditorRef>(null);
@@ -337,12 +454,17 @@ export default function App() {
   };
 
   const handleAiGenerate = async () => {
-    if (!aiPrompt.trim()) return;
+    if (!aiPrompt.trim() && chatAttachedImages.length === 0) return;
     
-    const userMessage: ChatMessage = { role: 'user', parts: [{ text: aiPrompt }] };
+    const userMessage: ChatMessage = { 
+      role: 'user', 
+      parts: [{ text: aiPrompt }],
+      images: chatAttachedImages.length > 0 ? chatAttachedImages : undefined
+    };
     const historyWithUser = [...chatHistory, userMessage];
     setChatHistory(historyWithUser);
     setAiPrompt('');
+    setChatAttachedImages([]);
     setIsGeneratingAi(true);
     setAiResult(null);
 
@@ -565,6 +687,21 @@ export default function App() {
                 </div>
                 <div className="flex items-center gap-1">
                   <button 
+                    onClick={() => setShowSavedConversations(true)}
+                    className="p-2 hover:bg-minimal-border rounded-full text-minimal-muted transition-colors"
+                    title="Saved Conversations"
+                  >
+                    <FolderOpen className="w-4 h-4" />
+                  </button>
+                  <button 
+                    onClick={saveCurrentChat}
+                    disabled={chatHistory.length === 0}
+                    className="p-2 hover:bg-minimal-border rounded-full text-minimal-muted disabled:opacity-30 transition-colors"
+                    title="Save Conversation"
+                  >
+                    <Save className="w-4 h-4" />
+                  </button>
+                  <button 
                     onClick={() => setShowAiSettings(!showAiSettings)}
                     className={cn(
                       "p-2 rounded-full transition-all",
@@ -679,6 +816,19 @@ export default function App() {
                                 ? "bg-minimal-accent text-white rounded-tr-none shadow-md shadow-minimal-accent/20" 
                                 : "bg-zinc-50 border border-minimal-border text-minimal-text rounded-tl-none"
                             )}>
+                              {msg.images && msg.images.length > 0 && (
+                                <div className="flex flex-wrap gap-2 mb-3">
+                                  {msg.images.map((img, i) => (
+                                    <img 
+                                      key={i} 
+                                      src={img} 
+                                      alt="uploaded" 
+                                      className="max-w-full md:max-w-[200px] max-h-[200px] rounded-lg border border-white/20 shadow-sm object-cover" 
+                                      referrerPolicy="no-referrer"
+                                    />
+                                  ))}
+                                </div>
+                              )}
                               <Markdown>{msg.parts[0].text}</Markdown>
                             </div>
                             <span className="text-[8px] font-bold text-minimal-muted uppercase tracking-widest opacity-60 px-1">
@@ -707,8 +857,52 @@ export default function App() {
 
                 <div className="p-4 md:p-6 bg-zinc-50 border-t border-minimal-border">
                   <section>
+                    {chatAttachedImages.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mb-3 px-1">
+                        {chatAttachedImages.map((img, idx) => (
+                          <div key={idx} className="relative group/img">
+                            <img 
+                              src={img} 
+                              alt="attached" 
+                              className="w-12 h-12 rounded-lg object-cover border border-minimal-border shadow-sm" 
+                              referrerPolicy="no-referrer"
+                            />
+                            <button 
+                              onClick={() => setChatAttachedImages(prev => prev.filter((_, i) => i !== idx))}
+                              className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full p-0.5 shadow-md opacity-0 group-hover/img:opacity-100 transition-opacity"
+                            >
+                              <X className="w-2.5 h-2.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-1 mb-2 px-1">
+                        <button onClick={() => formatChatInput('bold')} className="p-1.5 hover:bg-zinc-200 rounded text-minimal-muted transition-colors" title="Bold"><Bold className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => formatChatInput('italic')} className="p-1.5 hover:bg-zinc-200 rounded text-minimal-muted transition-colors" title="Italic"><Italic className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => formatChatInput('list')} className="p-1.5 hover:bg-zinc-200 rounded text-minimal-muted transition-colors" title="Bullet List"><List className="w-3.5 h-3.5" /></button>
+                        <div className="w-px h-3 bg-minimal-border mx-1" />
+                        <button onClick={() => chatImageInputRef.current?.click()} className="p-1.5 hover:bg-zinc-200 rounded text-minimal-muted transition-colors" title="Attach Image"><ImagePlus className="w-3.5 h-3.5" /></button>
+                        <input 
+                          type="file" 
+                          ref={chatImageInputRef} 
+                          className="hidden" 
+                          accept="image/*" 
+                          multiple 
+                          onChange={handleChatImageUpload} 
+                        />
+                        {chatHistory.length > 0 && (
+                          <div className="ml-auto flex items-center gap-1">
+                            <button onClick={() => exportChat(chatHistory, 'json')} className="p-1.5 hover:bg-zinc-200 rounded text-minimal-muted transition-colors" title="Export as JSON"><Download className="w-3.5 h-3.5" /></button>
+                            <button onClick={() => exportChat(chatHistory, 'md')} className="p-1.5 hover:bg-zinc-200 rounded text-minimal-muted transition-colors" title="Export as Markdown"><ImageIcon className="w-3.5 h-3.5" /></button>
+                          </div>
+                        )}
+                    </div>
+
                     <div className="relative group">
                       <textarea
+                        ref={chatInputRef}
                         value={aiPrompt}
                         onChange={(e) => setAiPrompt(e.target.value)}
                         onKeyDown={(e) => {
@@ -739,6 +933,76 @@ export default function App() {
                     )}
                   </section>
                 </div>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Saved Conversations Overlay */}
+      <AnimatePresence>
+        {showSavedConversations && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowSavedConversations(false)}
+              className="fixed inset-0 bg-zinc-950/40 backdrop-blur-sm z-[110]"
+            />
+            <motion.div
+              initial={{ y: 50, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 50, opacity: 0 }}
+              className="fixed inset-x-4 top-20 bottom-20 md:inset-x-auto md:right-8 md:top-24 md:bottom-24 md:w-[350px] bg-white border border-minimal-border rounded-3xl z-[120] shadow-2xl flex flex-col overflow-hidden"
+            >
+              <div className="p-4 border-b border-minimal-border flex justify-between items-center bg-zinc-50 px-6">
+                <div>
+                   <h3 className="text-xs font-bold text-minimal-text uppercase tracking-widest">Saved Chats</h3>
+                   <p className="text-[9px] font-bold text-minimal-muted uppercase tracking-tighter mt-0.5">{savedChats.length} Conversations</p>
+                </div>
+                <button onClick={() => setShowSavedConversations(false)} className="p-2 hover:bg-zinc-200 rounded-full transition-colors">
+                  <X className="w-4 h-4 text-minimal-muted" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+                {savedChats.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-center opacity-30 py-12">
+                     <FolderOpen className="w-8 h-8 mb-2" />
+                     <p className="text-[10px] font-bold uppercase tracking-widest">No saved chats</p>
+                  </div>
+                ) : (
+                  savedChats.map(chat => (
+                    <div 
+                      key={chat.id} 
+                      className="group/item bg-zinc-50 hover:bg-white border border-minimal-border hover:border-minimal-accent/30 rounded-2xl p-4 transition-all cursor-pointer shadow-sm hover:shadow-md"
+                    >
+                      <div className="flex justify-between items-start mb-2" onClick={() => loadChat(chat)}>
+                         <h4 className="text-[11px] font-bold text-minimal-text line-clamp-1">{chat.name}</h4>
+                         <span className="text-[8px] font-bold text-minimal-muted whitespace-nowrap ml-2">
+                           {new Date(chat.timestamp).toLocaleDateString()}
+                         </span>
+                      </div>
+                      <p className="text-[10px] text-minimal-muted line-clamp-2 mb-3" onClick={() => loadChat(chat)}>
+                        {chat.history[chat.history.length - 1]?.parts[0].text.substring(0, 80)}...
+                      </p>
+                      <div className="flex items-center gap-2 pt-3 border-t border-minimal-border/50">
+                         <button 
+                           onClick={() => exportChat(chat.history, 'md')}
+                           className="text-[9px] font-bold text-minimal-accent hover:underline uppercase tracking-tight flex items-center gap-1"
+                         >
+                           <Download className="w-2.5 h-2.5" /> Export
+                         </button>
+                         <button 
+                           onClick={() => deleteSavedChat(chat.id)}
+                           className="ml-auto text-[9px] font-bold text-red-400 hover:text-red-600 uppercase tracking-tight flex items-center gap-1"
+                         >
+                           <Trash2 className="w-2.5 h-2.5" /> Delete
+                         </button>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </motion.div>
           </>

@@ -5,6 +5,7 @@ export type AIAssistantAction = 'improve' | 'fix-grammar' | 'shorten' | 'expand'
 export interface ChatMessage {
   role: 'user' | 'model' | 'system';
   parts: { text: string }[];
+  images?: string[];
 }
 
 export const checkOllamaConnection = async (selectedModel?: string): Promise<{ success: boolean; model?: string; allModels: string[]; error?: string }> => {
@@ -161,7 +162,8 @@ export const chatWithAI = async (
     { role: 'system', content: systemInstruction },
     ...messages.filter(m => m.role !== 'system').map(m => ({
       role: m.role === 'model' ? 'assistant' : m.role,
-      content: m.parts[0].text
+      content: m.parts[0].text,
+      images: m.images
     }))
   ];
 
