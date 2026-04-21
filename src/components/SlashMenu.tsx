@@ -10,7 +10,8 @@ import {
   Code,
   Image as ImageIcon,
   CheckCheck,
-  Zap
+  Zap,
+  RotateCcw
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -30,8 +31,9 @@ const ITEMS: SlashMenuItem[] = [
   { id: 'image', label: 'Image', description: 'Insert or upload an image', icon: ImageIcon, action: 'image' },
   { id: 'ai-improve', label: 'AI Improve', description: 'Rewrite the paragraph', icon: Wand2, action: 'ai-improve' },
   { id: 'ai-outline', label: 'AI Outline', description: 'Generate structure', icon: Layout, action: 'ai-outline' },
-  { id: 'ai-summarize', label: 'AI Summarize', description: 'Sum up previous section', icon: FileText, action: 'ai-summarize' },
-  { id: 'ai-draft', label: 'AI Draft', description: 'Continue writing from here', icon: Zap, action: 'ai-draft' },
+  { id: 'ai-summarize', label: 'AI Summarize', description: 'Sum up selection', icon: FileText, action: 'summarize' },
+  { id: 'ai-rewrite', label: 'AI Rewrite', description: 'Rephrase selection', icon: RotateCcw, action: 'rewrite' },
+  { id: 'ai-complete', label: 'AI Auto-complete', description: 'Continue writing', icon: Zap, action: 'complete-text' },
 ];
 
 interface Props {

@@ -32,13 +32,14 @@ import {
   Maximize2,
   Zap,
   Layout,
-  FileText
+  FileText,
+  RotateCcw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { processAIAction, type AIAssistantAction } from '../services/aiService';
 import { getKrokiUrl } from '../lib/kroki';
-import { createSearchPlugin } from '../lib/searchPlugin';
+import { createSearchPlugin, searchPluginKey } from '../lib/searchPlugin';
 import { createCollabPlugin } from '../lib/collabPlugin';
 import { SlashMenu } from './SlashMenu';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -176,10 +177,12 @@ interface Props {
   onAiResult?: (result: string) => void;
   onAiStream?: (chunk: string) => void;
   onImageUploadRequest?: () => void;
+  onSearchMetadata?: (count: number, current: number) => void;
   searchQuery?: string;
   searchOptions?: {
     isCaseSensitive: boolean;
     isWholeWord: boolean;
+    isSemantic: boolean;
     searchIndex: number;
     currentMatchIndex: number;
   };
@@ -203,6 +206,27 @@ export interface EditorRef {
   getCursorContext: () => string;
 }
 
+const linkPreviewPlugin = new Plugin({
+  props: {
+    handleDOMEvents: {
+      mouseover(view, event) {
+        const pos = view.posAtCoords({ left: event.clientX, top: event.clientY });
+        if (pos) {
+          const node = view.state.doc.nodeAt(pos.pos);
+          const linkMark = view.state.doc.resolve(pos.pos).marks().find(m => m.type.name === 'link');
+          if (linkMark) {
+            const el = event.target as HTMLElement;
+            el.title = `Preview: ${linkMark.attrs.href}`;
+            // For a "real" preview we could fetch metadata, but browser title is a start.
+            // Let's add a more visible tooltip if possible.
+          }
+        }
+        return false;
+      }
+    }
+  }
+});
+
 const ProseMirrorEditor = forwardRef<EditorRef, Props>(({ 
   value, 
   onChange, 
@@ -219,8 +243,9 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
   onAiResult,
   onAiStream,
   onImageUploadRequest,
+  onSearchMetadata,
   searchQuery = '',
-  searchOptions = { isCaseSensitive: false, isWholeWord: false, searchIndex: -1, currentMatchIndex: 0 },
+  searchOptions = { isCaseSensitive: false, isWholeWord: false, isSemantic: false, searchIndex: -1, currentMatchIndex: 0 },
   collab
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -295,6 +320,7 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
         keymap(baseKeymap),
         buildInputRules(editorSchema),
         highlightPlugin,
+        linkPreviewPlugin,
         typewriterPlugin,
         searchPlugin,
         new Plugin({
@@ -334,6 +360,7 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
         role: "textbox",
         "aria-multiline": "true",
         "aria-label": "Markdown editor",
+        spellcheck: "true",
       },
       nodeViews: {
         code_block(node, view, getPos) {
@@ -347,6 +374,15 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
         const newState = this.state.apply(tr);
         this.updateState(newState);
         
+        // Track search metadata
+        if (onSearchMetadata) {
+          const searchState = searchPluginKey.getState(newState);
+          if (searchState) {
+             const count = searchState.decorations.find().length;
+             onSearchMetadata(count, searchOptions.currentMatchIndex);
+          }
+        }
+
         if (tr.docChanged && !isUpdatingFromProps.current) {
           const markdown = editorSerializer.serialize(newState.doc);
           onChange(markdown);
@@ -373,6 +409,20 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
           setSlashMenu(prev => ({ ...prev, show: false }));
         }
 
+        return false;
+      },
+      handlePaste(view, event) {
+        const text = event.clipboardData?.getData('text/plain');
+        if (text && /^https?:\/\/[^\s$.?#].[^\s]*$/.test(text.trim())) {
+          const confirmed = window.confirm("Detected a URL. Would you like to insert it as a Markdown link?");
+          if (confirmed) {
+            const label = window.prompt("Enter link label:", "Link") || "Link";
+            const markdownLink = `[${label}](${text.trim()})`;
+            const node = editorParser.parse(markdownLink);
+            view.dispatch(view.state.tr.replaceSelectionWith(node));
+            return true;
+          }
+        }
         return false;
       }
     });
@@ -595,6 +645,9 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
       } else {
         const parsed = editorParser.parse(result);
         const tr = state.tr.replaceWith(from, to, parsed.content);
+        tr.setMeta("addToHistory", true);
+        tr.setMeta("history$group", "ai-action-" + Date.now()); // Ensure distinct history step
+        tr.setMeta("ai-modification", true);
         dispatch(tr);
       }
       
@@ -625,7 +678,7 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
     }
     else if (action === 'code') setBlockType(editorSchema.nodes.code_block)(state, dispatch);
     else if (action === 'image') onImageUploadRequest?.();
-    else if (action.startsWith('ai-')) {
+    else if (['improve', 'outline', 'summarize', 'rewrite', 'complete-text'].includes(action) || action.startsWith('ai-')) {
       const type = action.replace('ai-', '') as AIAssistantAction;
       const $pos = state.doc.resolve(slashMenu.pos);
       const start = $pos.start();
@@ -776,19 +829,35 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
               onClick={() => handleAIAction('improve')}
               disabled={isProcessingAI}
               className="p-1.5 hover:bg-minimal-accent/20 text-minimal-accent rounded transition-colors"
-              title="Improve Flow"
+              title="Improve Writing"
             >
               <Zap className="w-3.5 h-3.5" />
             </button>
             <button
-              onClick={() => handleAIAction('draft-topic')}
+              onClick={() => handleAIAction('summarize')}
               disabled={isProcessingAI}
               className="p-1.5 hover:bg-minimal-accent/20 text-minimal-accent rounded transition-colors"
-              title="Draft Topic"
+              title="Summarize Selection"
             >
-              <ArrowRight className="w-3.5 h-3.5" />
+              <FileText className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => handleAIAction('expand')}
+              disabled={isProcessingAI}
+              className="p-1.5 hover:bg-minimal-accent/20 text-minimal-accent rounded transition-colors"
+              title="Expand Selection"
+            >
+              <Maximize2 className="w-3.5 h-3.5" />
             </button>
 
+            <button
+              onClick={() => handleAIAction('rewrite')}
+              disabled={isProcessingAI}
+              className="p-1.5 hover:bg-minimal-accent/20 text-minimal-accent rounded transition-colors"
+              title="Rewrite Selection"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
             <div className="w-px h-3 bg-white/20 mx-0.5" />
 
             <div className="relative">
@@ -830,6 +899,7 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
                         { id: 'fix-grammar', label: 'Fix Grammar', icon: CheckCheck },
                         { id: 'shorten', label: 'Make Shorter', icon: Minimize2 },
                         { id: 'expand', label: 'Expand Selection', icon: Maximize2 },
+                        { id: 'rewrite', label: 'Rewrite Section', icon: RotateCcw },
                       ].map(item => (
                         <button
                           key={item.id}

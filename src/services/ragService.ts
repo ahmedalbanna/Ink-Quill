@@ -227,6 +227,18 @@ export class RagService {
     return sorted.map((s, i) => `[RELEVANT CLIP ${i + 1}]\n${s.chunk.text}`).join('\n\n---\n\n');
   }
 
+  async searchDetailed(query: string, limit = 5, threshold = 0.2): Promise<{ text: string; score: number }[]> {
+    if (!embeddingService.isReady()) return [];
+    try {
+      const queryEmbedding = await this.getCachedEmbedding(query);
+      const results = vectorStore.searchWithScores(queryEmbedding, limit, threshold);
+      return results.map(r => ({ text: r.chunk.text, score: r.score }));
+    } catch (e) {
+      console.error('Semantic search error:', e);
+      return [];
+    }
+  }
+
   async getGlobalSummary(content: string): Promise<string> {
     const lines = content.split('\n');
     const sections: { level: number; title: string; summary: string }[] = [];

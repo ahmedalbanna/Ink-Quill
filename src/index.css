@@ -128,14 +128,17 @@
   line-height: var(--editor-line-height);
   color: var(--minimal-text); 
 }
-.ProseMirror h1 { @apply text-minimal-text mt-12 mb-8 font-extrabold tracking-tight border-b-2 border-minimal-border pb-4; font-size: 42px; }
-.ProseMirror h2 { @apply text-minimal-text mt-16 mb-6 font-bold tracking-tight border-b border-minimal-border/50 pb-2; font-size: 30px; }
-.ProseMirror h3 { @apply text-minimal-text mt-10 mb-4 font-bold; font-size: 24px; }
+.ProseMirror h1 { @apply text-minimal-accent mt-12 mb-8 font-extrabold tracking-tight border-b-2 border-minimal-accent/20 pb-4; font-size: 42px; }
+.ProseMirror h2 { @apply text-blue-500 mt-16 mb-6 font-bold tracking-tight border-b border-blue-500/10 pb-2; font-size: 30px; }
+.ProseMirror h3 { @apply text-indigo-500 mt-10 mb-4 font-bold; font-size: 24px; }
+.ProseMirror strong { @apply text-minimal-text font-bold; color: #1a567e; }
+.ProseMirror em { @apply italic text-minimal-muted/80; }
 .ProseMirror ul { @apply list-disc ps-8 mb-6 space-y-2; }
 .ProseMirror ol { @apply list-decimal ps-8 mb-6 space-y-2; }
 .ProseMirror li { @apply ps-2 font-medium; }
 .ProseMirror img { @apply max-w-full h-auto rounded-xl shadow-md my-8 border border-minimal-border block mx-auto; }
 .ProseMirror blockquote { @apply border-s-8 border-minimal-accent/30 bg-minimal-sidebar/50 ps-6 py-4 italic text-minimal-muted my-8 rounded-e-lg; }
+.ProseMirror a { @apply text-minimal-accent underline decoration-minimal-accent/30 underline-offset-2; }
 .ProseMirror pre { @apply bg-zinc-900 shadow-2xl text-zinc-100 p-8 rounded-2xl my-10 overflow-x-auto font-mono text-[13px] leading-relaxed border border-zinc-700/50 relative; background-image: linear-gradient(to bottom right, rgba(255,255,255,0.05), transparent); }
 .ProseMirror pre[data-language]::before {
   content: attr(data-language);
@@ -211,5 +214,16 @@
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: var(--minimal-muted);
+}
+.search-match-current {
+  position: relative;
+}
+.search-match-current:hover::after {
+  content: "Relevance: " attr(data-relevance);
+  @apply fixed bg-zinc-800 text-white text-[9px] px-2 py-1 rounded shadow-xl border border-zinc-700 -mt-8 left-1/2 -translate-x-1/2 z-[200] pointer-events-none font-bold uppercase tracking-widest whitespace-nowrap;
+}
+.search-match:hover::after {
+  content: "Rel: " attr(data-relevance);
+  @apply absolute bg-zinc-800/90 text-white text-[8px] px-1.5 py-0.5 rounded border border-zinc-700 -mt-6 left-1/2 -translate-x-1/2 z-[200] pointer-events-none font-bold;
 }
 

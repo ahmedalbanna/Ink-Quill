@@ -24,6 +24,7 @@ import {
   Type,
   Check,
   Sparkles,
+  Zap,
   Send,
   Languages,
   Menu,
@@ -142,6 +143,7 @@ export default function App() {
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [isCaseSensitive, setIsCaseSensitive] = useState(false);
   const [isWholeWord, setIsWholeWord] = useState(false);
+  const [isSemantic, setIsSemantic] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showSnapshots, setShowSnapshots] = useState(false);
   const [showFileActions, setShowFileActions] = useState(false);
@@ -414,6 +416,8 @@ export default function App() {
       return;
     }
 
+    if (isSemantic) return; // Managed by editor feedback
+
     const flags = isCaseSensitive ? 'g' : 'gi';
     let pattern = findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     if (isWholeWord) {
@@ -447,6 +451,12 @@ export default function App() {
   const handleFindNext = () => {
     if (!findText || matchCount === 0) return;
 
+    if (isSemantic) {
+      const nextIdx = (currentMatchIndex % matchCount) + 1;
+      setCurrentMatchIndex(nextIdx);
+      return;
+    }
+
     const flags = isCaseSensitive ? 'g' : 'gi';
     let pattern = findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     if (isWholeWord) pattern = `\\b${pattern}\\b`;
@@ -464,7 +474,6 @@ export default function App() {
 
     if (result) {
       setSearchIndex(result.index);
-      // currentMatchIndex will be updated by useEffect
     } else {
       setSearchIndex(-1);
     }
@@ -1613,8 +1622,36 @@ export default function App() {
                       >
                         W
                       </button>
+                      <button
+                        onClick={() => {
+                          setIsSemantic(!isSemantic);
+                          setSearchIndex(-1);
+                        }}
+                        className={cn(
+                          "text-[10px] font-bold px-1.5 py-0.5 rounded transition-all flex items-center gap-1",
+                          isSemantic ? "bg-minimal-accent text-white" : "text-minimal-muted hover:bg-minimal-border border border-minimal-border"
+                        )}
+                        title="Semantic Search (RAG)"
+                      >
+                        <Zap className={cn("w-2.5 h-2.5", isSemantic ? "fill-current" : "")} />
+                        Brain
+                      </button>
                     </div>
                   </div>
+                  {isSemantic && findText && (
+                    <div className="flex flex-col gap-1 px-1">
+                      <div className="flex justify-between items-center text-[9px] font-bold text-minimal-muted uppercase tracking-wider">
+                        <span>Semantic Relevance</span>
+                        <span>{matchCount > 0 ? "Matches Available" : "No Context Found"}</span>
+                      </div>
+                      <div className="h-1 bg-minimal-sidebar rounded-full overflow-hidden">
+                         <div 
+                           className="h-full bg-minimal-accent transition-all duration-500" 
+                           style={{ width: matchCount > 0 ? '100%' : '0%' }}
+                         />
+                      </div>
+                    </div>
+                  )}
                   <div className="flex gap-1">
                     <button onClick={handleFindNext} className="p-1.5 hover:bg-minimal-border rounded text-minimal-muted" title="Find Next">
                       <ChevronDown className="w-4 h-4" />
@@ -1675,6 +1712,12 @@ export default function App() {
               setAiResult(prev => (prev || '') + chunk);
               setAiAssistant(true);
             }}
+            onSearchMetadata={(count, current) => {
+              if (isSemantic) {
+                setMatchCount(count);
+                // current is already synced since App controls currentMatchIndex for semantic
+              }
+            }}
             onImageUploadRequest={() => {
               const choice = window.confirm("Click OK to Upload an image, or Cancel to provide a URL.");
               if (choice) {
@@ -1687,7 +1730,7 @@ export default function App() {
               }
             }}
             searchQuery={showSearch ? findText : ''}
-            searchOptions={{ isCaseSensitive, isWholeWord, searchIndex, currentMatchIndex }}
+            searchOptions={{ isCaseSensitive, isWholeWord, isSemantic, searchIndex, currentMatchIndex }}
             collab={{
               enabled: true,
               docId: 'local-document',

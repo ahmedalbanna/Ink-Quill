@@ -1,6 +1,6 @@
 import { ragService } from './ragService';
 
-export type AIAssistantAction = 'improve' | 'fix-grammar' | 'shorten' | 'expand' | 'generate-outline' | 'expand-outline' | 'summarize' | 'suggest-title' | 'draft-topic';
+export type AIAssistantAction = 'improve' | 'fix-grammar' | 'shorten' | 'expand' | 'generate-outline' | 'expand-outline' | 'summarize' | 'suggest-title' | 'draft-topic' | 'rewrite' | 'complete-text';
 
 export interface ChatMessage {
   role: 'user' | 'model' | 'system';
@@ -334,6 +334,14 @@ export const processAIAction = async (
     case 'suggest-title':
       systemInstruction += "Suggest three punchy and relevant titles for the following text. Return only the three titles as a list.";
       prompt = `Suggest titles for this text:\n\n${text}`;
+      break;
+    case 'rewrite':
+      systemInstruction += "Rewrite the following text from scratch while preserving all key information and the core message. Focus on better flow, clearer phrasing, and more engaging language.";
+      prompt = `Rewrite this text completely:\n\n${text}`;
+      break;
+    case 'complete-text':
+      systemInstruction += "You are a writing assistant. Based on the provided text context, continue the writing in the same style and tone. Provide a natural continuation of about 1-3 sentences. Do not repeat the input.";
+      prompt = `Continue this text:\n\n${text}`;
       break;
     default:
       prompt = text;
