@@ -50,6 +50,7 @@ export class RagService {
       // Update vector store atomically
       await vectorStore.setChunks(updatedChunks);
       
+      useUIStore.getState().setIndexedCounts(updatedChunks.length, vectorStore.getEpisodes().length);
       this.lastIndexedContent = content;
       console.log(`RAG Update: ${updatedChunks.length} chunks total, ${newEmbeddingsCount} newly embedded.`);
     } catch (error) {
@@ -164,6 +165,8 @@ export class RagService {
       } else {
         await vectorStore.addEpisodes([chunk]);
       }
+      
+      useUIStore.getState().setIndexedCounts(vectorStore.getChunks().length, vectorStore.getEpisodes().length);
       console.log(`Indexed conversation ${id} into episodic memory.`);
     } catch (e) {
       console.error('Error indexing conversation:', e);
@@ -182,43 +185,114 @@ export class RagService {
   }
 
   async getRelevantContext(query: string, limit = 5): Promise<string> {
+    return this.getWeightedContext([{ text: query, weight: 1.0 }], limit);
+  }
+
+  async getWeightedContext(queries: { text: string; weight: number }[], limit = 5): Promise<string> {
     if (!embeddingService.isReady()) return '';
-    const queryEmbedding = await this.getCachedEmbedding(query);
-    // Use the 0.3 threshold
-    const results = vectorStore.searchWithScores(queryEmbedding, limit, 0.3);
     
-    if (results.length === 0) return '';
+    // We'll perform searches for each query and aggregate results with weights
+    const resultsMap = new Map<string, { chunk: Chunk; score: number }>();
     
-    const fullContext = results.map(res => res.chunk.text).join('\n\n---\n\n');
-    return this.trimToTokens(fullContext, 2000);
+    for (const { text, weight } of queries) {
+      if (!text || !text.trim()) continue;
+      
+      try {
+        const queryEmbedding = await this.getCachedEmbedding(text);
+        // Search more than we need so we can aggregate and re-rank
+        const results = vectorStore.searchWithScores(queryEmbedding, limit * 3, 0.2);
+        
+        for (const { chunk, score } of results) {
+          const weightedScore = score * weight;
+          const existing = resultsMap.get(chunk.id);
+          if (existing) {
+            // If the chunk is hit by multiple query components, it's very relevant
+            existing.score += weightedScore;
+          } else {
+            resultsMap.set(chunk.id, { chunk, score: weightedScore });
+          }
+        }
+      } catch (e) {
+        console.error(`Weighted search error for query component "${text.substring(0, 50)}...":`, e);
+      }
+    }
+    
+    const sorted = Array.from(resultsMap.values())
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+      
+    if (sorted.length === 0) return '';
+    
+    // Join chunks with clear separators for the AI
+    return sorted.map((s, i) => `[RELEVANT CLIP ${i + 1}]\n${s.chunk.text}`).join('\n\n---\n\n');
   }
 
   async getGlobalSummary(content: string): Promise<string> {
     const lines = content.split('\n');
-    const outline: string[] = [];
+    const sections: { level: number; title: string; summary: string }[] = [];
     
-    let currentSection = "";
-    let insideHeading = false;
+    let currentParagraphs: string[] = [];
+    let lastHeading: { level: number; title: string } | null = null;
     
+    const captureSection = () => {
+      if (lastHeading) {
+        const text = currentParagraphs.join(' ');
+        const summary = text.length > 150 ? text.substring(0, 150) + "..." : text;
+        sections.push({ ...lastHeading, summary });
+        currentParagraphs = [];
+      }
+    };
+
     for (const line of lines) {
-      if (line.startsWith('#')) {
-        outline.push(line);
-        insideHeading = true;
-        currentSection = "";
-      } else if (insideHeading && line.trim() && outline.length <= 15) {
-        // capture first sentence or brief snippet under heading
-        currentSection += " " + line.trim();
-        if (currentSection.length > 100) {
-          outline.push(`  Summary: ${currentSection.substring(0, 100).trim()}...`);
-          insideHeading = false;
-        }
+      const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+      if (headingMatch) {
+        captureSection();
+        lastHeading = {
+          level: headingMatch[1].length,
+          title: headingMatch[2].trim()
+        };
+      } else if (line.trim() && lastHeading) {
+        currentParagraphs.push(line.trim());
       }
     }
+    captureSection();
     
-    if (outline.length === 0) return '';
+    if (sections.length === 0) {
+      // Fallback if no headings: just a high level summary of first 200 chars
+      const text = content.trim().substring(0, 200);
+      return text ? `Document Abstract: ${text}${content.length > 200 ? '...' : ''}` : '';
+    }
     
-    const summary = "Document hierarchical structure:\n" + outline.join('\n');
-    return this.trimToTokens(summary, 500);
+    const outline = sections.map(s => {
+      const indent = "  ".repeat(s.level - 1);
+      return `${indent}${s.level === 1 ? '■' : '□'} ${s.title}\n${indent}  └─ ${s.summary || '(Empty Section)'}`;
+    }).join('\n');
+    
+    const summary = `DOCUMENT STRUCTURAL MAP:\n${outline}`;
+    return this.trimToTokens(summary, 800);
+  }
+
+  async getCursorSectionInfo(content: string, cursorContext: string): Promise<string> {
+    // Attempt to identify which section the cursor is in
+    if (!cursorContext) return '';
+    
+    const lines = content.split('\n');
+    let currentSection = 'Introduction / Header';
+    
+    // Simple heuristic: find the last heading before the cursor context appears
+    // Since we don't have absolute byte offset, we search for the cursorContext string
+    const cursorIdx = content.indexOf(cursorContext);
+    if (cursorIdx === -1) return '';
+    
+    const contentBeforeCursor = content.substring(0, cursorIdx);
+    const headings = [...contentBeforeCursor.matchAll(/^(#{1,6})\s+(.+)$/gm)];
+    
+    if (headings.length > 0) {
+      const last = headings[headings.length - 1];
+      currentSection = last[2].trim();
+    }
+    
+    return currentSection;
   }
 
   buildContext(query: string, documentContent: string, cursorContext: string, chatHistory: any[], maxTokens: number = 4000): { systemInstruction: string, formattedMessages: any[] } {

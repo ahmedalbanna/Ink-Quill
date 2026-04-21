@@ -12,6 +12,8 @@ interface UIState {
   showSavedConversations: boolean;
   direction: 'ltr' | 'rtl';
   isIndexing: boolean;
+  indexedChunks: number;
+  indexedEpisodes: number;
   
   toggleTypewriter: () => void;
   toggleSuperZen: () => void;
@@ -26,6 +28,7 @@ interface UIState {
   setSavedConversations: (show: boolean | ((prev: boolean) => boolean)) => void;
   setDirection: (direction: 'ltr' | 'rtl' | ((prev: 'ltr' | 'rtl') => 'ltr' | 'rtl')) => void;
   setIndexing: (indexing: boolean) => void;
+  setIndexedCounts: (chunks: number, episodes: number) => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -41,6 +44,8 @@ export const useUIStore = create<UIState>()(
       showSavedConversations: false,
       direction: 'ltr',
       isIndexing: false,
+      indexedChunks: 0,
+      indexedEpisodes: 0,
 
       toggleTypewriter: () => set((state) => ({ isTypewriter: !state.isTypewriter })),
       toggleSuperZen: () => set((state) => ({ isSuperZen: !state.isSuperZen })),
@@ -73,6 +78,7 @@ export const useUIStore = create<UIState>()(
         direction: typeof direction === 'function' ? direction(state.direction) : direction 
       })),
       setIndexing: (isIndexing) => set({ isIndexing }),
+      setIndexedCounts: (indexedChunks, indexedEpisodes) => set({ indexedChunks, indexedEpisodes }),
     }),
     {
       name: 'ink-quill-ui-storage',

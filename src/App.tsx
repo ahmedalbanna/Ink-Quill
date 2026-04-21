@@ -106,7 +106,8 @@ export default function App() {
     showSettings, setSettings,
     showAiSettings, setAiSettings,
     showSavedConversations, setSavedConversations,
-    direction, setDirection, isIndexing
+    direction, setDirection, isIndexing,
+    indexedChunks, indexedEpisodes
   } = useUIStore();
   const {
     chatHistory, setChatHistory,
@@ -159,6 +160,15 @@ export default function App() {
     return embeddingService.subscribe((status, progress) => {
       setEmbeddingStatus(status);
       setEmbeddingProgress(progress);
+    });
+  }, []);
+
+  useEffect(() => {
+    // Initialize chunk counts on load
+    import('./services/embeddingService').then(({ vectorStore }) => {
+      vectorStore.init().then(() => {
+        useUIStore.getState().setIndexedCounts(vectorStore.getChunks().length, vectorStore.getEpisodes().length);
+      });
     });
   }, []);
 
@@ -504,6 +514,9 @@ export default function App() {
 
   const handleAiGenerate = async () => {
     if (!aiPrompt.trim() && chatAttachedImages.length === 0) return;
+
+    // Ensure RAG index is current for this query
+    ragService.indexDocument(markdown);
 
     const userMessage: ChatMessage = {
       role: 'user',
@@ -929,23 +942,43 @@ export default function App() {
 
                   {chatHistory.length > 0 && (
                     <section className="space-y-6">
-                      <div className="flex items-center justify-between sticky top-0 bg-minimal-bg/80 backdrop-blur pb-2 z-10">
-                        <h3 className="text-[10px] font-bold text-minimal-muted uppercase tracking-widest">Conversation history</h3>
-                        <button
-                          onClick={() => setChatHistory([])}
-                          className="text-[10px] font-bold text-minimal-accent hover:bg-minimal-accent/10 px-2 py-1 rounded transition-colors uppercase"
-                        >
-                          Clear
-                        </button>
+                      <div className="flex items-center justify-between sticky top-0 bg-minimal-bg/80 backdrop-blur pb-2 z-10 border-b border-minimal-border/30 mb-4 px-1">
+                        <h3 className="text-[10px] font-bold text-minimal-muted uppercase tracking-widest">Deep context Thread</h3>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setSavedConversations(true)}
+                            className="text-[10px] font-bold text-minimal-muted hover:text-minimal-accent hover:bg-minimal-accent/10 px-2 py-1 rounded transition-all uppercase flex items-center gap-1.5"
+                            title="Load Saved Conversations"
+                          >
+                            <History className="w-3 h-3" /> Library
+                          </button>
+                          <button
+                            onClick={saveCurrentChat}
+                            className="text-[10px] font-bold text-minimal-accent hover:bg-minimal-accent/10 px-2 py-1 rounded transition-colors uppercase flex items-center gap-1"
+                          >
+                            <Save className="w-3 h-3" /> Save
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (window.confirm("Clear this conversation history?")) {
+                                setChatHistory([]);
+                                setAiResult(null);
+                              }
+                            }}
+                            className="text-[10px] font-bold text-red-500 hover:bg-red-500/10 px-2 py-1 rounded transition-colors uppercase"
+                          >
+                            Clear
+                          </button>
+                        </div>
                       </div>
                       <div className="space-y-6 pb-4">
                         {chatHistory.map((msg, idx) => (
                           <div key={idx} className={cn(
-                            "flex flex-col gap-2 max-w-[90%]",
+                            "flex flex-col gap-2 max-w-[90%] group/msg",
                             msg.role === 'user' ? "ml-auto items-end" : "mr-auto items-start"
                           )}>
                             <div className={cn(
-                              "px-4 py-3 rounded-2xl text-xs font-medium leading-relaxed",
+                              "px-4 py-3 rounded-2xl text-xs font-medium leading-relaxed relative",
                               msg.role === 'user'
                                 ? "bg-minimal-accent text-white rounded-tr-none shadow-md shadow-minimal-accent/20"
                                 : "bg-minimal-sidebar border border-minimal-border text-minimal-text rounded-tl-none"
@@ -963,7 +996,43 @@ export default function App() {
                                   ))}
                                 </div>
                               )}
-                              <Markdown>{msg.parts[0].text}</Markdown>
+                              <div className="markdown-body">
+                                <Markdown>{msg.parts[0].text}</Markdown>
+                              </div>
+
+                              {msg.role === 'model' && (
+                                <div className="absolute top-0 right-0 -mr-2 -mt-2 flex gap-1 opacity-0 group-hover/msg:opacity-100 transition-opacity">
+                                  <button
+                                    onClick={() => {
+                                      setAiResult(msg.parts[0].text);
+                                      setAiAssistant(true); // Open the insertion helper
+                                    }}
+                                    className="p-1.5 bg-emerald-500 text-white rounded-lg shadow-lg hover:scale-110 transition-transform"
+                                    title="Accept / Use this text"
+                                  >
+                                    <Check className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setAiPrompt(`Revise this section: "${msg.parts[0].text.substring(0, 100)}..." \n\nMy Feedback: `);
+                                      chatInputRef.current?.focus();
+                                    }}
+                                    className="p-1.5 bg-blue-500 text-white rounded-lg shadow-lg hover:scale-110 transition-transform"
+                                    title="Revise / Feedback"
+                                  >
+                                    <ArrowRightLeft className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setChatHistory(prev => prev.filter((_, i) => i !== idx));
+                                    }}
+                                    className="p-1.5 bg-red-500 text-white rounded-lg shadow-lg hover:scale-110 transition-transform"
+                                    title="Dismiss"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              )}
                             </div>
                             <span className="text-[8px] font-bold text-minimal-muted uppercase tracking-widest opacity-60 px-1">
                               {msg.role === 'user' ? 'Direct Input' : 'Ink & Quill Intelligence'}
@@ -1974,30 +2043,51 @@ export default function App() {
                   </div>
                 )}
                 {embeddingStatus === 'ready' && (
-                  <div className="flex items-center gap-1.5 px-2 py-1 rounded-sm bg-emerald-500/5 text-emerald-600 border border-emerald-500/10 group cursor-help" title="Local Vector Store Active">
+                  <div className="flex items-center gap-1.5 px-2 py-1 rounded-sm bg-emerald-500/5 text-emerald-600 border border-emerald-500/10 group cursor-help transition-all animate-in fade-in slide-in-from-right-1 duration-500" title="Local Vector Store Active">
                     <Database className="w-3 h-3" />
-                    <span className="text-[9px] font-bold tracking-widest">VECTOR ACTIVE</span>
+                    <span className="text-[9px] font-bold tracking-widest">VECTOR AI READY</span>
                   </div>
                 )}
                 {embeddingStatus === 'error' && (
-                  <div className="flex items-center gap-1.5 px-2 py-1 rounded-sm bg-red-500/5 text-red-600 border border-red-500/10">
+                  <div className="flex items-center gap-1.5 px-2 py-1 rounded-sm bg-red-500/5 text-red-600 border border-red-500/10 hover:bg-red-500/10 transition-colors cursor-pointer" onClick={() => embeddingService.loadModel()}>
                     <X className="w-3 h-3" />
-                    <span className="text-[9px] font-bold tracking-widest">EMBED ERROR</span>
+                    <span className="text-[9px] font-bold tracking-widest">LOAD ERROR - RETRY?</span>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* System Info */}
+            {/* System Info & Indexing Status */}
             <div className="flex items-center gap-4 text-[9px] font-mono font-bold tracking-[0.2em] opacity-40">
-              <span className="hidden lg:inline">UTF-8</span>
-              {isIndexing && (
-                <div className="flex items-center gap-2 text-minimal-accent animate-pulse opacity-100">
-                  <span className="w-1 h-1 rounded-full bg-minimal-accent" />
-                  <span>INDEXING</span>
-                </div>
-              )}
-              <div className="flex items-center gap-1 px-1.5 py-0.5 border border-minimal-muted/20 rounded">
+              <span className="hidden lg:inline border-r border-minimal-border pr-4">UTF-8</span>
+              
+              <div className="flex items-center gap-4">
+                {isIndexing ? (
+                  <div className="flex items-center gap-2 text-minimal-accent animate-pulse opacity-100 bg-minimal-accent/5 px-2 py-0.5 rounded border border-minimal-accent/10">
+                    <Activity className="w-3 h-3" />
+                    <span>INDEXING DOCUMENT...</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    {indexedChunks > 0 && (
+                      <div className="flex items-center gap-2 group cursor-help" title={`${indexedChunks} document chunks and ${indexedEpisodes} conversation snapshots stored locally.`}>
+                        <div className="flex items-center gap-1 text-minimal-text opacity-70">
+                          <FileText className="w-3 h-3" />
+                          <span>{indexedChunks} CHUNKS</span>
+                        </div>
+                        {indexedEpisodes > 0 && (
+                          <div className="flex items-center gap-1 text-minimal-accent/60">
+                            <History className="w-3 h-3" />
+                            <span>{indexedEpisodes} MEMORIES</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-1 px-1.5 py-0.5 border border-minimal-muted/20 rounded hover:border-minimal-accent/40 transition-colors">
                 <span>MD</span>
               </div>
             </div>

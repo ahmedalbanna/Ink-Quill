@@ -263,13 +263,37 @@ export const processAIAction = async (
     apiKeys?: any;
     providerConfigs?: any;
     onChunk?: (chunk: string) => void;
+    documentContext?: string;
+    cursorContext?: string;
   }
 ): Promise<string> => {
-  const { personalInstructions = "", model = 'mistral', provider = 'ollama', apiKeys, providerConfigs, onChunk } = options;
+  const { 
+    personalInstructions = "", 
+    model = 'mistral', 
+    provider = 'ollama', 
+    apiKeys, 
+    providerConfigs, 
+    onChunk,
+    documentContext = "",
+    cursorContext = ""
+  } = options;
   
-  let systemInstruction = "You are a helpful writing assistant. ";
+  let systemInstruction = "You are a precise writing assistant integrated into Ink & Quill. Your goal is to help the user refine their document. ";
   if (personalInstructions) {
     systemInstruction += `The user has specified these stylistic preferences: "${personalInstructions}". Please adhere to them while performing the action. `;
+  }
+
+  // Use RAG to get broad document context for the specific selection
+  let ragContext = "";
+  if (documentContext) {
+    ragContext = await ragService.getWeightedContext([
+      { text, weight: 1.0 },
+      { text: cursorContext, weight: 0.5 }
+    ], 3); // Fetch a few relevant clips
+  }
+  
+  if (ragContext) {
+    systemInstruction += `\n\n### BROADER DOCUMENT CONTEXT ###\nUse the following relevant document sections to ensure your changes are cohesive with the rest of the work:\n${ragContext}`;
   }
   
   let prompt = "";
@@ -371,59 +395,72 @@ export const chatWithAI = async (
   
   // Get relevant context from RAG
   const lastUserMessage = [...messages].reverse().find(m => m.role === 'user')?.parts[0].text || "";
+  const recentChatContext = messages
+    .filter(m => m.role === 'user')
+    .slice(-3)
+    .map(m => m.parts[0].text)
+    .join(' ');
   
-  // 1. Fetch all contexts
-  const relevantContext = await ragService.getRelevantContext(lastUserMessage);
+  // 1. Fetch contexts with refined weighting
+  // Weights: Current Query (1.0), Current Cursor Area (0.8), Recent Conversation Theme (0.5)
+  const weightedContext = await ragService.getWeightedContext([
+    { text: lastUserMessage, weight: 1.0 },
+    { text: cursorContext, weight: 0.8 },
+    { text: recentChatContext, weight: 0.5 }
+  ]);
+  
   const globalSummary = await ragService.getGlobalSummary(documentContext);
+  const cursorSection = await ragService.getCursorSectionInfo(documentContext, cursorContext);
   const relevantEpisodes = await ragService.getRelevantEpisodes(lastUserMessage);
   
   // Token budget estimation (rough: 4 chars per token)
   const MAX_TOKENS = 4000;
-  let currentTokens = ragService.estimateTokens(systemInstruction) + ragService.estimateTokens(cursorContext);
-  
+  let currentTokens = ragService.estimateTokens(systemInstruction);
+
+  // Add structural map (High Priority for orientation)
   if (globalSummary) {
-    const summaryText = `\n\n### DOCUMENT STRUCTURE ###\n${globalSummary}`;
+    const summaryText = `\n\n### DOCUMENT HIERARCHY & SUMMARY ###\n${globalSummary}`;
     systemInstruction += summaryText;
     currentTokens += ragService.estimateTokens(summaryText);
   }
 
+  // Add explicit focus markers to help the AI understand where the user is "looking"
   if (cursorContext) {
-    systemInstruction += `\n\n### NEARBY CONTEXT (Around Cursor) ###\n${cursorContext}`;
+    const focusHeader = cursorSection ? `[Currently in Section: "${cursorSection}"]` : "";
+    const focusSection = `\n\n### CURRENT WRITING FOCUS ${focusHeader} ###\n${cursorContext}\n\n[INSTRUCTION: The user is currently editing or writing near the text above. Prioritize this area for immediate contextual relevance.]`;
+    systemInstruction += focusSection;
+    currentTokens += ragService.estimateTokens(focusSection);
   }
-  
-  // 2. Budget aware inclusion of full doc vs semantic chunks
+
+  // 2. Budget aware inclusion of semantic chunks vs full doc
   const docTokens = ragService.estimateTokens(documentContext);
-  if (docTokens < 1500 && (currentTokens + docTokens) < MAX_TOKENS) {
-    systemInstruction += `\n\n### FULL DOCUMENT CONTENT ###\n${documentContext}`;
+  const semanticTokens = weightedContext ? ragService.estimateTokens(weightedContext) : 0;
+
+  // Decide whether to include full document or just semantic clips
+  // If doc is small enough to fit alongside semantic clips, include both for maximum coherence
+  if (docTokens < 1800 && (currentTokens + docTokens + semanticTokens) < MAX_TOKENS) {
+    systemInstruction += `\n\n### FULL DOCUMENT REFERENCE ###\n${documentContext}`;
     currentTokens += docTokens;
-  } else {
-    systemInstruction += `\n\n### ADDITIONAL RELEVANT CHUNKS ###\nUse the specific context provided below to answer questions accurately.`;
-    if (relevantContext) {
-      const contextTokens = ragService.estimateTokens(relevantContext);
-      if (currentTokens + contextTokens < MAX_TOKENS) {
-        systemInstruction += `\n\n### SEMANTICALLY RELEVANT CONTEXT ###\n${relevantContext}`;
-        currentTokens += contextTokens;
-      } else {
-        // Trim relevant context
-        const trimmed = ragService.trimToTokens(relevantContext, MAX_TOKENS - currentTokens);
-        systemInstruction += `\n\n### SEMANTICALLY RELEVANT CONTEXT ###\n${trimmed}`;
-        currentTokens = MAX_TOKENS;
-      }
-    }
+  } 
+
+  // Always include weighted semantic chunks if available, as they represent the multi-dimensional "hit"
+  if (weightedContext && currentTokens < MAX_TOKENS) {
+    const available = MAX_TOKENS - currentTokens;
+    const clipsText = `\n\n### RELEVANT KNOWLEDGE CLIPS (Weighted Retrieval) ###\n${ragService.trimToTokens(weightedContext, available)}`;
+    systemInstruction += clipsText;
+    currentTokens += ragService.estimateTokens(clipsText);
   }
 
   // 3. Episodic Memory (lowest priority)
   if (relevantEpisodes && currentTokens < MAX_TOKENS) {
-    const epTokens = ragService.estimateTokens(relevantEpisodes);
-    if (currentTokens + epTokens < MAX_TOKENS) {
-      systemInstruction += `\n\n### RELEVANT PAST CONVERSATIONS ###\n${relevantEpisodes}`;
-    } else {
-      const trimmed = ragService.trimToTokens(relevantEpisodes, MAX_TOKENS - currentTokens);
-      systemInstruction += `\n\n### RELEVANT PAST CONVERSATIONS ###\n${trimmed}`;
+    const available = MAX_TOKENS - currentTokens;
+    if (available > 100) {
+      const epSection = `\n\n### CORRELATED PAST DISCUSSIONS ###\n${ragService.trimToTokens(relevantEpisodes, available)}`;
+      systemInstruction += epSection;
     }
   }
   
-  systemInstruction += `\n\nIMPORTANT: Use the provided context to answer questions about the document. If the information is not in the context or document, state that you don't know based on the current document, rather than saying you don't have memory.`;
+  systemInstruction += `\n\n### FINAL DIRECTIVE ###\nYou are an embedded writing partner. Act as if you are looking at the document alongside the user. Refer to specific sections by name when possible. If the context is insufficient, ask clarifying questions rather than hallucinating facts.`;
 
   const formattedMessages = [
     { role: 'system', content: systemInstruction },

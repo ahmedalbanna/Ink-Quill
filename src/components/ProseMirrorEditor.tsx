@@ -448,6 +448,33 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
     }
   }, [searchQuery, searchOptions.searchIndex, searchOptions.currentMatchIndex, searchOptions.isCaseSensitive, searchOptions.isWholeWord, direction, isTypewriter, placeholder]);
 
+  const getCursorContextInternal = () => {
+    if (!viewRef.current) return '';
+    const { state } = viewRef.current;
+    const { $from } = state.selection;
+    
+    // Get current paragraph
+    const start = $from.start();
+    const end = $from.end();
+    const currentPara = state.doc.textBetween(start, end, ' ');
+    
+    // Try to find the heading path
+    let headingPath = [];
+    let pos = $from.pos;
+    while (pos > 0) {
+      const $pos = state.doc.resolve(pos);
+      const node = $pos.parent;
+      if (node.type.name === 'heading') {
+        headingPath.unshift(node.textContent);
+      }
+      pos = $pos.before();
+      if (pos === 0) break;
+    }
+    
+    const pathStr = headingPath.length > 0 ? `Path: ${headingPath.join(' > ')}` : '';
+    return `${pathStr}\n\n${currentPara}`.trim();
+  };
+
   useImperativeHandle(ref, () => ({
     focus: () => {
       viewRef.current?.focus();
@@ -510,30 +537,7 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
       handleFormat(type);
     },
     getCursorContext: () => {
-      if (!viewRef.current) return '';
-      const { state } = viewRef.current;
-      const { $from } = state.selection;
-      
-      // Get current paragraph
-      const start = $from.start();
-      const end = $from.end();
-      const currentPara = state.doc.textBetween(start, end, ' ');
-      
-      // Try to find the heading path
-      let headingPath = [];
-      let pos = $from.pos;
-      while (pos > 0) {
-        const $pos = state.doc.resolve(pos);
-        const node = $pos.parent;
-        if (node.type.name === 'heading') {
-          headingPath.unshift(node.textContent);
-        }
-        pos = $pos.before();
-        if (pos === 0) break;
-      }
-      
-      const pathStr = headingPath.length > 0 ? `Path: ${headingPath.join(' > ')}` : '';
-      return `${pathStr}\n\n${currentPara}`.trim();
+      return getCursorContextInternal();
     }
   }));
 
@@ -564,6 +568,9 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
 
     setIsProcessingAI(true);
     try {
+      const fullDoc = defaultMarkdownSerializer.serialize(state.doc);
+      const cursorContext = getCursorContextInternal();
+
       const result = await processAIAction(
         selectedText, 
         action, 
@@ -577,7 +584,9 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
             if (onAiStream) {
               onAiStream(chunk);
             }
-          }
+          },
+          documentContext: fullDoc,
+          cursorContext: cursorContext
         }
       );
       
