@@ -5,11 +5,16 @@ export interface Chunk {
   hash?: string; // Add hash for incremental indexing
 }
 
+export type EmbeddingStatus = 'idle' | 'loading' | 'ready' | 'error';
+
 class EmbeddingService {
   private worker: Worker | null = null;
   private pendingRequests = new Map<string, (embedding: number[]) => void>();
-  private isReady = false;
+  private status: EmbeddingStatus = 'idle';
+  private progress: number = 0;
+  private listeners: Set<(status: EmbeddingStatus, progress: number) => void> = new Set();
   private readyPromise: Promise<void> | null = null;
+  private resolveReady: (() => void) | null = null;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -18,29 +23,81 @@ class EmbeddingService {
       });
       
       this.readyPromise = new Promise((resolve) => {
-        this.worker!.onmessage = (event) => {
-          const { type, embedding, id, error } = event.data;
-          
-          if (type === 'ready') {
-            this.isReady = true;
-            resolve();
-          } else if (type === 'embedding' && id) {
-            const resolveReq = this.pendingRequests.get(id);
-            if (resolveReq) {
-              resolveReq(embedding);
-              this.pendingRequests.delete(id);
-            }
-          } else if (type === 'error') {
-            console.error('Embedding Worker Error:', error);
-          }
-        };
+        this.resolveReady = resolve;
       });
+
+      this.worker.onmessage = (event) => {
+        const { type, embedding, id, error, progress: progressData } = event.data;
+        
+        if (type === 'worker-ready') {
+          // Worker is alive, but model not loaded
+          console.log('Embedding worker ready');
+        } else if (type === 'progress') {
+          if (progressData.status === 'progress' && progressData.progress !== undefined) {
+            this.progress = progressData.progress;
+            this.notify();
+          }
+        } else if (type === 'model-ready') {
+          this.status = 'ready';
+          this.progress = 100;
+          if (this.resolveReady) this.resolveReady();
+          this.notify();
+        } else if (type === 'embedding' && id) {
+          const resolveReq = this.pendingRequests.get(id);
+          if (resolveReq) {
+            resolveReq(embedding);
+            this.pendingRequests.delete(id);
+          }
+        } else if (type === 'error') {
+          this.status = 'error';
+          console.error('Embedding Worker Error:', error);
+          this.notify();
+        }
+      };
 
       this.worker.postMessage({ type: 'init' });
     }
   }
 
+  private notify() {
+    this.listeners.forEach(l => l(this.status, this.progress));
+  }
+
+  subscribe(callback: (status: EmbeddingStatus, progress: number) => void) {
+    this.listeners.add(callback);
+    callback(this.status, this.progress);
+    return () => { this.listeners.delete(callback); };
+  }
+
+  getStatus() {
+    return { status: this.status, progress: this.progress };
+  }
+
+  isReady() {
+    return this.status === 'ready';
+  }
+
+  async loadModel() {
+    if (this.status === 'ready' || this.status === 'loading') return this.readyPromise;
+    
+    this.status = 'loading';
+    this.progress = 0;
+    this.notify();
+    
+    if (this.worker) {
+      this.worker.postMessage({ type: 'load-model' });
+    }
+    return this.readyPromise;
+  }
+
   async init() {
+    if (this.status === 'idle') {
+      // If someone calls init but it's idle, we don't want to hang forever.
+      // We'll just return a rejected promise or similar.
+      // Actually, standard behavior for RAG was to auto-load.
+      // With manual load, we should probably throw if not ready.
+      throw new Error('Embedding model not loaded. Please load it from the footer.');
+    }
     return this.readyPromise;
   }
 
@@ -53,7 +110,7 @@ class EmbeddingService {
       const timeout = setTimeout(() => {
         this.pendingRequests.delete(id);
         reject(new Error('Embedding request timed out'));
-      }, 30000);
+      }, 60000);
 
       this.pendingRequests.set(id, (embedding) => {
         clearTimeout(timeout);

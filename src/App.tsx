@@ -42,7 +42,10 @@ import {
   FileText,
   Upload,
   Link as LinkIcon,
-  Keyboard
+  Keyboard,
+  Database,
+  Cpu,
+  Activity
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Markdown from 'react-markdown';
@@ -52,6 +55,7 @@ import { generateContentFromPrompt, processAIAction, chatWithAI, checkOllamaConn
 import { ragService } from './services/ragService';
 import { exportToPDF, exportToHTML, exportToMarkdown, exportToDOCX } from './services/exportService';
 import { importFile } from './services/importService';
+import { embeddingService, EmbeddingStatus } from './services/embeddingService';
 import { useEditorStore } from './stores/editorStore';
 import { useUIStore } from './stores/uiStore';
 import { useAIStore } from './stores/aiStore';
@@ -147,6 +151,16 @@ export default function App() {
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const [chatAttachedImages, setChatAttachedImages] = useState<string[]>([]);
   const importFileInputRef = useRef<HTMLInputElement>(null);
+
+  const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatus>('idle');
+  const [embeddingProgress, setEmbeddingProgress] = useState(0);
+
+  useEffect(() => {
+    return embeddingService.subscribe((status, progress) => {
+      setEmbeddingStatus(status);
+      setEmbeddingProgress(progress);
+    });
+  }, []);
 
   // Local state for things that don't need persistence yet or are session-based
 
@@ -1353,14 +1367,16 @@ export default function App() {
                     <p className="text-[9px] text-center text-minimal-muted/50 py-4 italic font-medium">No snapshots yet</p>
                   ) : (
                     snapshots.map(s => (
-                      <button
+                      <div
                         key={s.id}
                         onClick={() => {
                           if (window.confirm("Restore this version? Your current work will be overwritten.")) {
                             setMarkdown(s.content);
                           }
                         }}
-                        className="w-full text-left p-2 hover:bg-minimal-sidebar rounded-xl transition-all border border-transparent hover:border-minimal-border group/s"
+                        className="w-full text-left p-2 hover:bg-minimal-sidebar rounded-xl transition-all border border-transparent hover:border-minimal-border group/s cursor-pointer"
+                        role="button"
+                        tabIndex={0}
                       >
                         <div className="flex justify-between items-center mb-0.5">
                           <span className="text-[10px] font-bold text-minimal-text">{new Date(s.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
@@ -1369,13 +1385,13 @@ export default function App() {
                               e.stopPropagation();
                               setSnapshots(prev => prev.filter(snap => snap.id !== s.id));
                             }}
-                            className="opacity-0 group-hover/s:opacity-100 p-1 hover:text-red-500 transition-all"
+                            className="opacity-0 group-hover/s:opacity-100 p-1 hover:text-red-500 transition-all font-bold"
                           >
                             <X className="w-2.5 h-2.5" />
                           </button>
                         </div>
                         <p className="text-[8px] text-minimal-muted truncate">{s.content.substring(0, 40)}...</p>
-                      </button>
+                      </div>
                     ))
                   )}
                 </div>
@@ -1866,54 +1882,125 @@ export default function App() {
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: 20, opacity: 0 }}
           className={cn(
-            "fixed bottom-0 inset-x-0 h-8 md:h-10 border-t border-minimal-border z-50 px-4 md:px-6 flex items-center justify-between text-[10px] md:text-[11px] tracking-tight transition-all duration-1000",
-            "bg-minimal-bg text-minimal-muted"
+            "fixed bottom-0 inset-x-0 h-9 md:h-11 border-t border-minimal-border z-50 px-4 md:px-6 flex items-center justify-between transition-all duration-500",
+            "bg-minimal-bg/90 backdrop-blur-md text-minimal-muted select-none"
           )}
         >
-          <div className="flex gap-4 md:gap-6 items-center">
-            <div className="flex gap-2 md:gap-4">
-              <span className="font-medium">W: {wordCount}</span>
-              <span className="hidden sm:inline opacity-60">C: {charCount}</span>
+          {/* Left Side: Stats */}
+          <div className="flex gap-4 md:gap-8 items-center h-full">
+            <div className="flex gap-4 md:gap-6">
+              <div className="flex flex-col justify-center">
+                <span className="text-[8px] font-bold opacity-40 leading-none mb-0.5">WORDS</span>
+                <span className="text-[10px] font-mono font-bold text-minimal-text">{wordCount}</span>
+              </div>
+              <div className="flex flex-col justify-center">
+                <span className="text-[8px] font-bold opacity-40 leading-none mb-0.5">CHARS</span>
+                <span className="text-[10px] font-mono font-bold text-minimal-text">{charCount}</span>
+              </div>
             </div>
-            <div className="h-3 w-px bg-minimal-border/20 hidden sm:block" />
-            <div className="hidden sm:flex items-center gap-2">
-              <Clock className="w-3 h-3 opacity-60" />
-              <span className="opacity-60">{readingTime} min read</span>
+
+            <div className="h-6 w-px bg-minimal-border hidden sm:block" />
+
+            <div className="hidden sm:flex flex-col justify-center">
+              <span className="text-[8px] font-bold opacity-40 leading-none mb-0.5">READ TIME</span>
+              <div className="flex items-center gap-1.5">
+                <Clock className="w-3 h-3 opacity-60" />
+                <span className="text-[10px] font-mono font-bold text-minimal-text">{readingTime} MIN</span>
+              </div>
             </div>
+
             {wordGoal > 0 && (
               <>
-                <div className="h-3 w-px bg-minimal-border/20 hidden md:block" />
-                <div className="flex items-center gap-2 md:gap-3">
-                  <div className="w-16 md:w-32 h-1 bg-minimal-border/20 rounded-full overflow-hidden hidden sm:block">
-                    <motion.div
-                      initial={{ width: 0 }}
-                      animate={{ width: `${goalProgress}%` }}
-                      className="h-full bg-minimal-accent"
-                    />
+                <div className="h-6 w-px bg-minimal-border hidden md:block" />
+                <div className="flex flex-col justify-center">
+                  <span className="text-[8px] font-bold opacity-40 leading-none mb-0.5">PROGRESS</span>
+                  <div className="flex items-center gap-3">
+                    <div className="w-16 md:w-32 h-1 bg-minimal-border rounded-full overflow-hidden hidden sm:block">
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: `${goalProgress}%` }}
+                        className={cn("h-full", goalProgress >= 100 ? "bg-emerald-500" : "bg-minimal-accent")}
+                      />
+                    </div>
+                    <span className={cn(
+                      "text-[10px] font-mono font-bold",
+                      goalProgress >= 100 ? "text-emerald-500 underline underline-offset-2" : "text-minimal-accent"
+                    )}>
+                      {Math.round(goalProgress)}%
+                    </span>
                   </div>
-                  <span className={cn(
-                    "font-bold transition-colors",
-                    goalProgress >= 100 ? "text-emerald-500" : "text-minimal-accent"
-                  )}>
-                    {Math.round(goalProgress)}% <span className="hidden sm:inline font-medium opacity-60">Complete</span>
-                  </span>
                 </div>
               </>
             )}
           </div>
-          <div className={cn(
-            "flex gap-4 font-mono text-[9px] uppercase tracking-widest items-center",
-            "opacity-60"
-          )}>
-            {ollamaStatus.connected && (
-              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-green-500/10 text-green-600 border border-green-500/20">
-                <div className="w-1 h-1 rounded-full bg-green-500 animate-pulse" />
-                <span>{ollamaStatus.model}</span>
+
+          {/* Right Side: Status Indicators */}
+          <div className="flex gap-4 md:gap-6 items-center">
+            {/* AI Status Group */}
+            <div className="flex gap-2 items-center">
+              {/* Main Model Connection */}
+              {ollamaStatus.connected && (
+                <div 
+                  className={cn(
+                    "flex items-center gap-1.5 px-2 py-1 rounded-sm border transition-all",
+                    "bg-green-500/5 text-green-600 border-green-500/10"
+                  )}
+                  title={`AI Provider: ${provider.toUpperCase()} | Model: ${ollamaStatus.model}`}
+                >
+                  <Cpu className="w-3 h-3" />
+                  <span className="text-[9px] font-bold tracking-widest">{ollamaStatus.model.toUpperCase()}</span>
+                </div>
+              )}
+
+              {/* Embedding Model Status - High Priority UI */}
+              <div className="flex items-center">
+                {embeddingStatus === 'idle' && (
+                  <button 
+                    onClick={() => embeddingService.loadModel()}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-sm bg-minimal-accent/10 text-minimal-accent border border-minimal-accent/20 hover:bg-minimal-accent text-[9px] hover:text-white font-bold tracking-widest transition-all group scale-100 hover:scale-105 active:scale-95"
+                    title="Start Downloading Vector Embedding Model (@xenova/transformers)"
+                  >
+                    <Upload className="w-3 h-3 rotate-180" />
+                    <span>LOAD VECTOR AI</span>
+                  </button>
+                )}
+                {embeddingStatus === 'loading' && (
+                  <div className="flex items-center gap-2 px-2 py-1 rounded-sm bg-yellow-500/5 text-yellow-600 border border-yellow-500/10">
+                    <Activity className="w-3 h-3 animate-pulse" />
+                    <span className="text-[9px] font-bold tracking-widest">{Math.round(embeddingProgress)}% SYNCING</span>
+                    <div className="w-10 h-1 bg-yellow-500/10 rounded-full overflow-hidden">
+                      <div className="h-full bg-yellow-500 transition-all duration-300" style={{ width: `${embeddingProgress}%` }} />
+                    </div>
+                  </div>
+                )}
+                {embeddingStatus === 'ready' && (
+                  <div className="flex items-center gap-1.5 px-2 py-1 rounded-sm bg-emerald-500/5 text-emerald-600 border border-emerald-500/10 group cursor-help" title="Local Vector Store Active">
+                    <Database className="w-3 h-3" />
+                    <span className="text-[9px] font-bold tracking-widest">VECTOR ACTIVE</span>
+                  </div>
+                )}
+                {embeddingStatus === 'error' && (
+                  <div className="flex items-center gap-1.5 px-2 py-1 rounded-sm bg-red-500/5 text-red-600 border border-red-500/10">
+                    <X className="w-3 h-3" />
+                    <span className="text-[9px] font-bold tracking-widest">EMBED ERROR</span>
+                  </div>
+                )}
               </div>
-            )}
-            <span className="hidden sm:inline">UTF-8</span>
-            {isIndexing && <span className="opacity-100 text-minimal-accent font-bold animate-pulse">INDEXING...</span>}
-            <span className="text-minimal-accent font-bold">MD</span>
+            </div>
+
+            {/* System Info */}
+            <div className="flex items-center gap-4 text-[9px] font-mono font-bold tracking-[0.2em] opacity-40">
+              <span className="hidden lg:inline">UTF-8</span>
+              {isIndexing && (
+                <div className="flex items-center gap-2 text-minimal-accent animate-pulse opacity-100">
+                  <span className="w-1 h-1 rounded-full bg-minimal-accent" />
+                  <span>INDEXING</span>
+                </div>
+              )}
+              <div className="flex items-center gap-1 px-1.5 py-0.5 border border-minimal-muted/20 rounded">
+                <span>MD</span>
+              </div>
+            </div>
           </div>
         </motion.footer>
       </AnimatePresence>

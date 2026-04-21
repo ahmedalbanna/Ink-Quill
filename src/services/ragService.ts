@@ -10,6 +10,7 @@ export class RagService {
 
   async indexDocument(content: string) {
     if (content === this.lastIndexedContent || this.isIndexing) return;
+    if (!embeddingService.isReady()) return;
     
     this.isIndexing = true;
     useUIStore.getState().setIndexing(true);
@@ -172,6 +173,7 @@ export class RagService {
   }
 
   async getRelevantEpisodes(query: string, limit = 3): Promise<string> {
+    if (!embeddingService.isReady()) return '';
     const queryEmbedding = await this.getCachedEmbedding(query);
     const results = vectorStore.searchEpisodes(queryEmbedding, limit, 0.3);
     
@@ -180,6 +182,7 @@ export class RagService {
   }
 
   async getRelevantContext(query: string, limit = 5): Promise<string> {
+    if (!embeddingService.isReady()) return '';
     const queryEmbedding = await this.getCachedEmbedding(query);
     // Use the 0.3 threshold
     const results = vectorStore.searchWithScores(queryEmbedding, limit, 0.3);

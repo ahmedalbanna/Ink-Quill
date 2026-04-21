@@ -1,5 +1,5 @@
 import { useEffect, useRef, useImperativeHandle, forwardRef, useState } from 'react';
-import { EditorState, Plugin, Selection } from 'prosemirror-state';
+import { EditorState, Plugin, Selection, TextSelection } from 'prosemirror-state';
 import { EditorView, Decoration, DecorationSet } from 'prosemirror-view';
 import { Schema, DOMParser, DOMSerializer, Slice } from 'prosemirror-model';
 import { schema as baseSchema } from 'prosemirror-markdown';
@@ -8,7 +8,7 @@ import { baseKeymap, setBlockType, toggleMark } from 'prosemirror-commands';
 import { history, undo, redo } from 'prosemirror-history';
 import { buildInputRules, buildKeymap } from './prose-setup';
 import { highlightPlugin } from './prose-highlight';
-import { defaultMarkdownParser, defaultMarkdownSerializer, MarkdownSerializer } from 'prosemirror-markdown';
+import { defaultMarkdownParser, defaultMarkdownSerializer, MarkdownSerializer, MarkdownParser } from 'prosemirror-markdown';
 import { 
   Bold, 
   Italic, 
@@ -72,6 +72,18 @@ const editorSerializer = new MarkdownSerializer(defaultMarkdownSerializer.nodes,
   strike: { open: "~~", close: "~~", mixable: true, expelEnclosingWhitespace: true },
   underline: { open: "<u>", close: "</u>", mixable: true }
 });
+
+// Create a parser that uses our custom schema and clean tokens to avoid schema mismatch
+const cleanTokens = Object.fromEntries(
+  Object.entries((defaultMarkdownParser as any).tokens).map(([name, spec]: [string, any]) => {
+    const newSpec = { ...spec };
+    if (newSpec.block && typeof newSpec.block !== 'string') newSpec.block = newSpec.block.name;
+    if (newSpec.node && typeof newSpec.node !== 'string') newSpec.node = newSpec.node.name;
+    if (newSpec.mark && typeof newSpec.mark !== 'string') newSpec.mark = newSpec.mark.name;
+    return [name, newSpec];
+  })
+);
+const editorParser = new MarkdownParser(editorSchema, (defaultMarkdownParser as any).tokenizer, cleanTokens);
 
 class UmlNodeView {
   dom: HTMLElement;
@@ -268,7 +280,8 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
     }) : null;
 
     const state = EditorState.create({
-      doc: defaultMarkdownParser.parse(value),
+      schema: editorSchema,
+      doc: editorParser.parse(value),
       plugins: [
         ...(collabInstance ? collabInstance.plugins : [
           history(),
@@ -328,7 +341,7 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
         }
       },
       clipboardTextParser(text) {
-        return new Slice(defaultMarkdownParser.parse(text).content, 0, 0);
+        return new Slice(editorParser.parse(text).content, 0, 0);
       },
       dispatchTransaction(tr) {
         const newState = this.state.apply(tr);
@@ -376,7 +389,7 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
     if (viewRef.current && value !== editorSerializer.serialize(viewRef.current.state.doc)) {
       isUpdatingFromProps.current = true;
       const { state } = viewRef.current;
-      const tr = state.tr.replaceWith(0, state.doc.content.size, defaultMarkdownParser.parse(value).content);
+      const tr = state.tr.replaceWith(0, state.doc.content.size, editorParser.parse(value).content);
       viewRef.current.dispatch(tr);
       isUpdatingFromProps.current = false;
     }
@@ -456,14 +469,14 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
       const { state, dispatch } = viewRef.current;
       const { from } = state.selection;
       
-      const node = baseSchema.nodes.image.create({ src, alt, title });
+      const node = editorSchema.nodes.image.create({ src, alt, title });
       const tr = state.tr.insert(from, node);
       dispatch(tr);
     },
     appendMarkdown: (content: string) => {
       if (!viewRef.current) return;
       const { state, dispatch } = viewRef.current;
-      const parsed = defaultMarkdownParser.parse(content);
+      const parsed = editorParser.parse(content);
       const tr = state.tr.insert(state.doc.content.size, parsed.content);
       dispatch(tr);
       viewRef.current.focus();
@@ -472,7 +485,7 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
       if (!viewRef.current) return;
       const { state, dispatch } = viewRef.current;
       const { from, to } = state.selection;
-      const parsed = defaultMarkdownParser.parse(content);
+      const parsed = editorParser.parse(content);
       const tr = state.tr.replaceWith(from, to, parsed.content);
       dispatch(tr);
       viewRef.current.focus();
@@ -571,7 +584,7 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
       if (onAiResult) {
         onAiResult(result);
       } else {
-        const parsed = defaultMarkdownParser.parse(result);
+        const parsed = editorParser.parse(result);
         const tr = state.tr.replaceWith(from, to, parsed.content);
         dispatch(tr);
       }
@@ -610,7 +623,6 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
       const end = $pos.end();
       
       // Select the current paragraph/block
-      const { TextSelection } = require('prosemirror-state');
       const trSelect = viewRef.current.state.tr.setSelection(TextSelection.create(viewRef.current.state.doc, start, end));
       viewRef.current.dispatch(trSelect);
       
