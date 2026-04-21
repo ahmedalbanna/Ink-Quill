@@ -1,5 +1,5 @@
 import { useEffect, useRef, useImperativeHandle, forwardRef, useState } from 'react';
-import { EditorState, Plugin } from 'prosemirror-state';
+import { EditorState, Plugin, Selection } from 'prosemirror-state';
 import { EditorView, Decoration, DecorationSet } from 'prosemirror-view';
 import { Schema, DOMParser, DOMSerializer, Slice } from 'prosemirror-model';
 import { schema as baseSchema } from 'prosemirror-markdown';
@@ -38,6 +38,10 @@ import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { processAIAction, type AIAssistantAction } from '../services/aiService';
 import { getKrokiUrl } from '../lib/kroki';
+import { createSearchPlugin } from '../lib/searchPlugin';
+import { createCollabPlugin } from '../lib/collabPlugin';
+import { SlashMenu } from './SlashMenu';
+import { ErrorBoundary } from './ErrorBoundary';
 
 // We'll use a slightly customized schema to support more formatting
 const editorSchema = new Schema({
@@ -152,8 +156,11 @@ interface Props {
   placeholder?: string;
   isTypewriter?: boolean;
   direction?: 'ltr' | 'rtl';
-  aiPersonalInstructions?: string;
+  personalInstructions?: string;
   selectedModel?: string;
+  provider?: 'ollama' | 'openai' | 'anthropic';
+  apiKeys?: any;
+  providerConfigs?: any;
   onAiResult?: (result: string) => void;
   onAiStream?: (chunk: string) => void;
   onImageUploadRequest?: () => void;
@@ -163,6 +170,11 @@ interface Props {
     isWholeWord: boolean;
     searchIndex: number;
     currentMatchIndex: number;
+  };
+  collab?: {
+    enabled: boolean;
+    docId: string;
+    username?: string;
   };
 }
 
@@ -174,7 +186,9 @@ export interface EditorRef {
   replaceSelectionWithMarkdown: (markdown: string) => void;
   getSelectedText: () => string;
   getHtml: () => string;
+  getDoc: () => any;
   handleFormat: (type: string) => void;
+  getCursorContext: () => string;
 }
 
 const ProseMirrorEditor = forwardRef<EditorRef, Props>(({ 
@@ -185,13 +199,17 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
   placeholder, 
   isTypewriter, 
   direction = 'ltr', 
-  aiPersonalInstructions,
+  personalInstructions,
   selectedModel = 'mistral',
+  provider = 'ollama',
+  apiKeys,
+  providerConfigs,
   onAiResult,
   onAiStream,
   onImageUploadRequest,
   searchQuery = '',
-  searchOptions = { isCaseSensitive: false, isWholeWord: false, searchIndex: -1, currentMatchIndex: 0 }
+  searchOptions = { isCaseSensitive: false, isWholeWord: false, searchIndex: -1, currentMatchIndex: 0 },
+  collab
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
@@ -200,6 +218,7 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
   const [bubbleMenu, setBubbleMenu] = useState<{ x: number, y: number, show: boolean }>({ x: 0, y: 0, show: false });
   const [isProcessingAI, setIsProcessingAI] = useState(false);
   const [showAiPopover, setShowAiPopover] = useState(false);
+  const [slashMenu, setSlashMenu] = useState<{ x: number, y: number, show: boolean, pos: number }>({ x: 0, y: 0, show: false, pos: 0 });
 
   useEffect(() => {
     if (!editorRef.current) return;
@@ -213,6 +232,9 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
             const { state } = view;
             const { selection } = state;
             if (!selection.empty) return;
+            
+            // Avoid scrolling for the first few lines of a new document
+            if (selection.from < 50) return;
 
             const coords = view.coordsAtPos(selection.from);
             const editorRect = editorRef.current?.getBoundingClientRect();
@@ -223,7 +245,9 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
             const currentY = coords.top;
             
             const diff = currentY - targetY;
-            if (Math.abs(diff) > 20) {
+            
+            // Only scroll if we are below the target point
+            if (diff > 0 && Math.abs(diff) > 20) {
               const scrollContainer = editorRef.current?.parentElement;
               if (scrollContainer) {
                 scrollContainer.scrollBy({ top: diff, behavior: 'smooth' });
@@ -235,77 +259,25 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
     });
 
     // Search highlighting plugin
-    const searchPlugin = new Plugin({
-      state: {
-        init() { return DecorationSet.empty; },
-        apply(tr, old, oldState, newState) {
-          const query = tr.getMeta("searchQuery");
-          const options = tr.getMeta("searchOptions");
-          
-          // Only re-calculate if the query, options, or document changed
-          if (query === undefined && options === undefined && !tr.docChanged) {
-            return old.map(tr.mapping, tr.doc);
-          }
+    const searchPlugin = createSearchPlugin();
 
-          // We need to keep track of the current query and options if we didn't receive them in this meta
-          const currentQuery = query !== undefined ? query : tr.getMeta("prevSearchQuery");
-          const currentOptions = options !== undefined ? options : tr.getMeta("prevSearchOptions");
-
-          if (!currentQuery) return DecorationSet.empty;
-
-          const flags = currentOptions?.isCaseSensitive ? 'g' : 'gi';
-          let pattern = currentQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          if (currentOptions?.isWholeWord) pattern = `\\b${pattern}\\b`;
-
-          const decorations: Decoration[] = [];
-          let globalMatchCount = 0;
-          
-          try {
-            newState.doc.descendants((node, pos) => {
-              if (node.isText) {
-                const nodeText = node.text || "";
-                let m;
-                const r = new RegExp(pattern, flags);
-                while ((m = r.exec(nodeText)) !== null) {
-                  globalMatchCount++;
-                  const start = pos + m.index;
-                  const end = start + m[0].length;
-                  
-                  // Use the global counter to match currentMatchIndex from App.tsx
-                  const isCurrent = currentOptions?.currentMatchIndex !== 0 && globalMatchCount === currentOptions?.currentMatchIndex;
-
-                  decorations.push(Decoration.inline(start, end, {
-                    class: cn(
-                      "transition-all duration-300 rounded-[2px] px-[1.5px] -mx-[1.5px]",
-                      isCurrent 
-                        ? "bg-minimal-accent text-white shadow-[0_0_15px_rgba(var(--minimal-accent-rgb),0.8)] ring-2 ring-minimal-accent z-10 scale-[1.05] inline-block" 
-                        : "bg-minimal-accent/20 border-b-2 border-minimal-accent/40"
-                    )
-                  }));
-                }
-              }
-            });
-          } catch (e) {}
-
-          return DecorationSet.create(newState.doc, decorations);
-        }
-      },
-      props: {
-        decorations(state) {
-          return this.getState(state);
-        }
-      }
-    });
+    // Collaboration plugin
+    const collabInstance = collab?.enabled ? createCollabPlugin({
+      docId: collab.docId,
+      username: collab.username
+    }) : null;
 
     const state = EditorState.create({
       doc: defaultMarkdownParser.parse(value),
       plugins: [
-        history(),
-        keymap({
-          "Mod-z": undo,
-          "Mod-y": redo,
-          "Mod-Shift-z": redo,
-        }),
+        ...(collabInstance ? collabInstance.plugins : [
+          history(),
+          keymap({
+            "Mod-z": undo,
+            "Mod-y": redo,
+            "Mod-Shift-z": redo,
+          }),
+        ]),
         keymap(buildKeymap(editorSchema)),
         keymap(baseKeymap),
         buildInputRules(editorSchema),
@@ -346,6 +318,9 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
         class: cn("ProseMirror", isTypewriter && "typewriter-mode"),
         "data-placeholder": placeholder || "Start writing...",
         dir: direction,
+        role: "textbox",
+        "aria-multiline": "true",
+        "aria-label": "Markdown editor",
       },
       nodeViews: {
         code_block(node, view, getPos) {
@@ -356,8 +331,8 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
         return new Slice(defaultMarkdownParser.parse(text).content, 0, 0);
       },
       dispatchTransaction(tr) {
-        const newState = view.state.apply(tr);
-        view.updateState(newState);
+        const newState = this.state.apply(tr);
+        this.updateState(newState);
         
         if (tr.docChanged && !isUpdatingFromProps.current) {
           const markdown = editorSerializer.serialize(newState.doc);
@@ -366,11 +341,25 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
       },
       handleKeyDown(view, event) {
         if (onKeyDown) {
-          // We can't easily construct a full React.KeyboardEvent, 
-          // but we can pass enough of it or just the native event.
-          // Let's cast to any and pass the native event.
           onKeyDown(event as any);
         }
+
+        // Slash command detection
+        if (event.key === '/') {
+          const { selection } = view.state;
+          if (selection.empty) {
+            const coords = view.coordsAtPos(selection.from);
+            setSlashMenu({
+              x: coords.left,
+              y: coords.bottom + 5,
+              show: true,
+              pos: selection.from
+            });
+          }
+        } else if (event.key === 'Escape' || event.key === ' ') {
+          setSlashMenu(prev => ({ ...prev, show: false }));
+        }
+
         return false;
       }
     });
@@ -501,8 +490,37 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
       container.appendChild(fragment);
       return container.innerHTML;
     },
+    getDoc: () => {
+      return viewRef.current?.state.doc;
+    },
     handleFormat: (type: string) => {
       handleFormat(type);
+    },
+    getCursorContext: () => {
+      if (!viewRef.current) return '';
+      const { state } = viewRef.current;
+      const { $from } = state.selection;
+      
+      // Get current paragraph
+      const start = $from.start();
+      const end = $from.end();
+      const currentPara = state.doc.textBetween(start, end, ' ');
+      
+      // Try to find the heading path
+      let headingPath = [];
+      let pos = $from.pos;
+      while (pos > 0) {
+        const $pos = state.doc.resolve(pos);
+        const node = $pos.parent;
+        if (node.type.name === 'heading') {
+          headingPath.unshift(node.textContent);
+        }
+        pos = $pos.before();
+        if (pos === 0) break;
+      }
+      
+      const pathStr = headingPath.length > 0 ? `Path: ${headingPath.join(' > ')}` : '';
+      return `${pathStr}\n\n${currentPara}`.trim();
     }
   }));
 
@@ -536,11 +554,16 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
       const result = await processAIAction(
         selectedText, 
         action, 
-        aiPersonalInstructions, 
-        selectedModel,
-        (chunk) => {
-          if (onAiStream) {
-            onAiStream(chunk);
+        {
+          personalInstructions, 
+          model: selectedModel,
+          provider: provider as 'ollama' | 'openai' | 'anthropic',
+          apiKeys,
+          providerConfigs,
+          onChunk: (chunk) => {
+            if (onAiStream) {
+              onAiStream(chunk);
+            }
           }
         }
       );
@@ -563,12 +586,61 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
     }
   };
 
+  const handleSlashSelect = async (action: string) => {
+    if (!viewRef.current) return;
+    const { state, dispatch } = viewRef.current;
+    
+    // Remove the '/' character
+    const tr = state.tr.delete(slashMenu.pos - 1, slashMenu.pos);
+    dispatch(tr);
+    setSlashMenu(prev => ({ ...prev, show: false }));
+
+    if (action === 'h1') handleFormat('h1');
+    else if (action === 'h2') handleFormat('h2');
+    else if (action === 'bullet') {
+      const node = editorSchema.nodes.bullet_list.createAndFill();
+      if (node) dispatch(state.tr.replaceSelectionWith(node));
+    }
+    else if (action === 'code') setBlockType(editorSchema.nodes.code_block)(state, dispatch);
+    else if (action === 'image') onImageUploadRequest?.();
+    else if (action.startsWith('ai-')) {
+      const type = action.replace('ai-', '') as AIAssistantAction;
+      const $pos = state.doc.resolve(slashMenu.pos);
+      const start = $pos.start();
+      const end = $pos.end();
+      
+      // Select the current paragraph/block
+      const { TextSelection } = require('prosemirror-state');
+      const trSelect = viewRef.current.state.tr.setSelection(TextSelection.create(viewRef.current.state.doc, start, end));
+      viewRef.current.dispatch(trSelect);
+      
+      await handleAIAction(type);
+    }
+    
+    viewRef.current.focus();
+  };
+
   const wrapInBlock = (type: any) => (state: EditorState, dispatch: any) => {
      return setBlockType(type)(state, dispatch);
   };
 
+  useEffect(() => {
+    if (viewRef.current) {
+      viewRef.current.focus();
+      const { state, dispatch } = viewRef.current;
+      dispatch(state.tr.setSelection(Selection.atEnd(state.doc)));
+    }
+  }, []);
+
   return (
     <div ref={containerRef} className={cn("relative h-full flex flex-col", className)}>
+      <ErrorBoundary>
+        <div 
+          ref={editorRef} 
+          className="flex-1 overflow-y-auto outline-none prose-first-child-no-margin" 
+        />
+      </ErrorBoundary>
+      
       <AnimatePresence>
         {bubbleMenu.show && (
           <motion.div
@@ -583,97 +655,101 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
             }}
             className="z-[100] flex items-center gap-1 bg-zinc-900 border border-zinc-700/50 rounded-lg p-1 shadow-2xl backdrop-blur"
           >
-            <button
-              onClick={() => handleFormat('h1')}
-              className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
-              title="Heading 1"
-            >
-              <Heading1 className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => handleFormat('h2')}
-              className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
-              title="Heading 2"
-            >
-              <Heading2 className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => handleFormat('h3')}
-              className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
-              title="Heading 3"
-            >
-              <Heading3 className="w-3.5 h-3.5" />
-            </button>
-            <div className="w-px h-3 bg-white/20 mx-0.5" />
-            <button
-              onClick={() => handleFormat('bold')}
-              className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
-              title="Bold"
-            >
-              <Bold className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => handleFormat('italic')}
-              className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
-              title="Italic"
-            >
-              <Italic className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => handleFormat('underline')}
-              className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
-              title="Underline"
-            >
-              <Underline className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => handleFormat('strike')}
-              className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
-              title="Strikethrough"
-            >
-              <Strikethrough className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => handleFormat('code')}
-              className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
-              title="Code"
-            >
-              <Code className="w-3.5 h-3.5" />
-            </button>
-            <div className="w-px h-3 bg-white/20 mx-0.5" />
-            <button
-              onClick={() => {
-                const url = window.prompt("Enter URL:");
-                if (url && viewRef.current) {
-                  const { state, dispatch } = viewRef.current;
-                  toggleMark(baseSchema.marks.link, { href: url })(state, dispatch);
-                }
-              }}
-              className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
-              title="Link"
-            >
-              <Link className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => {
-                if (onImageUploadRequest) {
-                  onImageUploadRequest();
-                } else {
-                  const url = window.prompt("Enter Image URL:");
-                  if (url && viewRef.current) {
-                    const { state, dispatch } = viewRef.current;
-                    const { from } = state.selection;
-                    const node = baseSchema.nodes.image.create({ src: url, alt: "Image" });
-                    dispatch(state.tr.insert(from, node));
-                  }
-                }
-              }}
-              className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
-              title="Insert Image"
-            >
-              <ImageIcon className="w-3.5 h-3.5" />
-            </button>
-            <div className="w-px h-3 bg-white/20 mx-0.5" />
+            {!isTypewriter && (
+              <>
+                <button
+                  onClick={() => handleFormat('h1')}
+                  className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
+                  title="Heading 1"
+                >
+                  <Heading1 className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => handleFormat('h2')}
+                  className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
+                  title="Heading 2"
+                >
+                  <Heading2 className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => handleFormat('h3')}
+                  className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
+                  title="Heading 3"
+                >
+                  <Heading3 className="w-3.5 h-3.5" />
+                </button>
+                <div className="w-px h-3 bg-white/20 mx-0.5" />
+                <button
+                  onClick={() => handleFormat('bold')}
+                  className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
+                  title="Bold"
+                >
+                  <Bold className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => handleFormat('italic')}
+                  className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
+                  title="Italic"
+                >
+                  <Italic className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => handleFormat('underline')}
+                  className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
+                  title="Underline"
+                >
+                  <Underline className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => handleFormat('strike')}
+                  className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
+                  title="Strikethrough"
+                >
+                  <Strikethrough className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => handleFormat('code')}
+                  className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
+                  title="Code"
+                >
+                  <Code className="w-3.5 h-3.5" />
+                </button>
+                <div className="w-px h-3 bg-white/20 mx-0.5" />
+                <button
+                  onClick={() => {
+                    const url = window.prompt("Enter URL:");
+                    if (url && viewRef.current) {
+                      const { state, dispatch } = viewRef.current;
+                      toggleMark(editorSchema.marks.link, { href: url })(state, dispatch);
+                    }
+                  }}
+                  className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
+                  title="Link"
+                >
+                  <Link className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => {
+                    if (onImageUploadRequest) {
+                      onImageUploadRequest();
+                    } else {
+                      const url = window.prompt("Enter Image URL:");
+                      if (url && viewRef.current) {
+                        const { state, dispatch } = viewRef.current;
+                        const { from } = state.selection;
+                        const node = editorSchema.nodes.image.create({ src: url, alt: "Image" });
+                        dispatch(state.tr.insert(from, node));
+                      }
+                    }
+                  }}
+                  className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
+                  title="Insert Image"
+                >
+                  <ImageIcon className="w-3.5 h-3.5" />
+                </button>
+                <div className="w-px h-3 bg-white/20 mx-0.5" />
+              </>
+            )}
             
             <button
               onClick={() => handleAIAction('improve')}
@@ -769,10 +845,16 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
           </motion.div>
         )}
       </AnimatePresence>
-      <div 
-        ref={editorRef} 
-        className="flex-1"
-      />
+      <AnimatePresence>
+        {slashMenu.show && (
+          <SlashMenu
+            x={slashMenu.x}
+            y={slashMenu.y}
+            onSelect={handleSlashSelect}
+            onClose={() => setSlashMenu(prev => ({ ...prev, show: false }))}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 });

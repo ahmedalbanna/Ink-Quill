@@ -11,6 +11,21 @@
   --minimal-accent: #3498db;
   --minimal-accent-rgb: 52, 152, 219;
   --minimal-font: "Inter", sans-serif;
+  
+  /* Dynamic Editor Variables */
+  --editor-font-size: 16px;
+  --editor-line-height: 1.6;
+  --editor-max-width: 800px;
+}
+
+[data-theme="dark"] {
+  --minimal-bg: #1a1a1a;
+  --minimal-sidebar: #2a2a2a;
+  --minimal-border: #3a3a3a;
+  --minimal-text: #e0e0e0;
+  --minimal-muted: #71717a;
+  --minimal-accent: #4a9eff;
+  --minimal-accent-rgb: 74, 158, 255;
 }
 
 @theme {
@@ -68,7 +83,7 @@
 }
 
 .markdown-body blockquote { 
-  @apply border-l-8 border-minimal-accent/30 bg-minimal-sidebar/50 pl-6 py-4 italic text-zinc-500 my-8 rounded-r-lg; 
+  @apply border-l-8 border-minimal-accent/30 bg-minimal-sidebar/50 pl-6 py-4 italic text-minimal-muted my-8 rounded-r-lg; 
 }
 
 .markdown-body table { 
@@ -81,7 +96,7 @@
   @apply bg-minimal-sidebar font-bold text-minimal-text border-b-2 border-minimal-border; 
 }
 .markdown-body tr:nth-child(even) {
-  @apply bg-zinc-50/50;
+  @apply bg-minimal-sidebar/30;
 }
 
 .markdown-body a { 
@@ -107,7 +122,12 @@
   }
 }
 
-.ProseMirror p { @apply mb-6 leading-loose text-[16px]; color: var(--minimal-text); }
+.ProseMirror p { 
+  @apply mb-6; 
+  font-size: var(--editor-font-size);
+  line-height: var(--editor-line-height);
+  color: var(--minimal-text); 
+}
 .ProseMirror h1 { @apply text-minimal-text mt-12 mb-8 font-extrabold tracking-tight border-b-2 border-minimal-border pb-4; font-size: 42px; }
 .ProseMirror h2 { @apply text-minimal-text mt-16 mb-6 font-bold tracking-tight border-b border-minimal-border/50 pb-2; font-size: 30px; }
 .ProseMirror h3 { @apply text-minimal-text mt-10 mb-4 font-bold; font-size: 24px; }
@@ -115,7 +135,7 @@
 .ProseMirror ol { @apply list-decimal ps-8 mb-6 space-y-2; }
 .ProseMirror li { @apply ps-2 font-medium; }
 .ProseMirror img { @apply max-w-full h-auto rounded-xl shadow-md my-8 border border-minimal-border block mx-auto; }
-.ProseMirror blockquote { @apply border-s-8 border-minimal-accent/30 bg-minimal-sidebar/50 ps-6 py-4 italic text-zinc-500 my-8 rounded-e-lg; }
+.ProseMirror blockquote { @apply border-s-8 border-minimal-accent/30 bg-minimal-sidebar/50 ps-6 py-4 italic text-minimal-muted my-8 rounded-e-lg; }
 .ProseMirror pre { @apply bg-zinc-900 shadow-2xl text-zinc-100 p-8 rounded-2xl my-10 overflow-x-auto font-mono text-[13px] leading-relaxed border border-zinc-700/50 relative; background-image: linear-gradient(to bottom right, rgba(255,255,255,0.05), transparent); }
 .ProseMirror pre[data-language]::before {
   content: attr(data-language);
@@ -146,7 +166,7 @@
 
 .ProseMirror-placeholder:before {
   content: attr(data-placeholder);
-  @apply text-zinc-300 absolute pointer-events-none;
+  @apply text-minimal-muted/40 absolute pointer-events-none;
 }
 
 /* UML Rendering Styles */
@@ -175,7 +195,10 @@
   @apply opacity-100;
 }
 
-/* Custom Mini Scrollbar */
+.prose-first-child-no-margin .ProseMirror > *:first-child {
+  margin-top: 0 !important;
+}
+
 .custom-scrollbar::-webkit-scrollbar {
   width: 3px;
 }
@@ -183,10 +206,10 @@
   background: transparent;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #3f3f46; /* zinc-700 */
+  background: var(--minimal-border);
   border-radius: 10px;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #52525b; /* zinc-600 */
+  background: var(--minimal-muted);
 }
 
