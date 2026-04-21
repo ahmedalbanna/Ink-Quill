@@ -62,37 +62,26 @@ import { useUIStore } from './stores/uiStore';
 import { useAIStore } from './stores/aiStore';
 import { useSettingsStore } from './stores/settingsStore';
 
-const DEFAULT_MARKDOWN = `# Welcome to Ink & Quill
+const DEFAULT_MARKDOWN = `Here is a detailed guide to **Conducting Gap Analysis (Feature comparison matrices)** written for a **Senior System Analyst & Requirements Engineer**. You will use gap analysis to compare current systems, vendor products, or as-is vs to-be states, and produce actionable requirements for closing the gaps.
 
-Ink & Quill is a clean, distraction-free Markdown editor.
+## Conducting Gap Analysis (Feature comparison matrices)
 
-## Key Features
-- **Real-time Preview**: See your changes as you type.
-- **GFM Support**: Tables, task lists, and more.
-- **Auto-save**: Your work is saved locally in your browser.
-- **Focus Mode**: Minimize distractions and just write.
+As a **Senior System Analyst**, gap analysis is one of your most valuable tools for **bridging the present state to a desired future state**. Whether you are evaluating a commercial off-the-shelf (COTS) product, migrating from a legacy system, or comparing your solution against competitors, you will produce **feature comparison matrices** that drive investment decisions, requirement prioritization, and project scope.
 
-### Basic Syntax
-1. **Bold**: \*\*text\*\* or __text__
-2. *Italic*: \*text\* or _text_
-3. [Links](https://google.com)
-4. \`Inline code\`
-5. > Blockquotes
+This content covers:
+- What gap analysis is (and isn't).
+- Step-by-step process for conducting it.
 
-\`\`\`javascript
-// Code blocks
-function hello() {
-  console.log("Hello, world!");
-}
-\`\`\`
+### Feature Comparison Matrix
 
-| Feature | Support |
-| :--- | :--- |
-| Tables | Yes |
-| Lists | Yes |
-| Focus | Perfect |
+| Feature | System A (Current) | System B (To-Be) | Gap Status |
+| :--- | :--- | :--- | :--- |
+| **Real-time Collaboration** | No | Yes | Critical Gap |
+| **Markdown Export** | Partial | Full | Minor Gap |
+| **AI Writing Partner** | No | Yes | Strategic Gap |
+| **Versioning** | Yes | Yes | No Gap |
 
-Enjoy your writing journey!
+Enjoy your writing journey with Ink & Quill!
 `;
 
 export default function App() {

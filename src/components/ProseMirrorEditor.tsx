@@ -35,6 +35,7 @@ import {
   FileText,
   RotateCcw
 } from 'lucide-react';
+import { tableNodes, tableEditing, goToNextCell } from 'prosemirror-tables';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { processAIAction, type AIAssistantAction } from '../services/aiService';
@@ -46,7 +47,17 @@ import { ErrorBoundary } from './ErrorBoundary';
 
 // We'll use a slightly customized schema to support more formatting
 const editorSchema = new Schema({
-  nodes: baseSchema.spec.nodes,
+  nodes: baseSchema.spec.nodes.append(tableNodes({
+    tableGroup: "block",
+    cellContent: "block+",
+    cellAttributes: {
+      background: {
+        default: null,
+        getFromDOM(dom) { return (dom as HTMLElement).style.backgroundColor || null },
+        setDOMAttr(value, attrs) { if (value) attrs.style = (attrs.style || "") + `background-color: ${value};` }
+      }
+    }
+  })),
   marks: baseSchema.spec.marks.append({
     strike: {
       parseDOM: [
@@ -67,24 +78,64 @@ const editorSchema = new Schema({
   })
 });
 
-// Custom serializer to handle our new marks
-const editorSerializer = new MarkdownSerializer(defaultMarkdownSerializer.nodes, {
+// Custom serializer to handle our new marks and tables
+const editorSerializer = new MarkdownSerializer({
+  ...defaultMarkdownSerializer.nodes,
+  table: (state, node) => {
+    state.write("\n");
+    state.renderContent(node);
+    state.write("\n");
+  },
+  table_row: (state, node) => {
+    state.write("| ");
+    node.forEach((cell, _, i) => {
+      if (i > 0) state.write(" | ");
+      state.renderContent(cell);
+    });
+    state.write(" |\n");
+    if (node.childCount > 0 && node.child(0).type.name === 'table_header') {
+       state.write("|");
+       for (let i = 0; i < node.childCount; i++) state.write(" --- |");
+       state.write("\n");
+    }
+  },
+  table_cell: (state, node) => {
+    state.renderContent(node);
+  },
+  table_header: (state, node) => {
+    state.renderContent(node);
+  }
+}, {
   ...defaultMarkdownSerializer.marks,
   strike: { open: "~~", close: "~~", mixable: true, expelEnclosingWhitespace: true },
   underline: { open: "<u>", close: "</u>", mixable: true }
 });
 
-// Create a parser that uses our custom schema and clean tokens to avoid schema mismatch
-const cleanTokens = Object.fromEntries(
-  Object.entries((defaultMarkdownParser as any).tokens).map(([name, spec]: [string, any]) => {
-    const newSpec = { ...spec };
-    if (newSpec.block && typeof newSpec.block !== 'string') newSpec.block = newSpec.block.name;
-    if (newSpec.node && typeof newSpec.node !== 'string') newSpec.node = newSpec.node.name;
-    if (newSpec.mark && typeof newSpec.mark !== 'string') newSpec.mark = newSpec.mark.name;
-    return [name, newSpec];
-  })
-);
-const editorParser = new MarkdownParser(editorSchema, (defaultMarkdownParser as any).tokenizer, cleanTokens);
+const tableTokens = {
+  table: { block: "table" },
+  tr: { block: "table_row" },
+  th: { block: "table_header" },
+  td: { block: "table_cell" }
+};
+
+const tokenizer = (defaultMarkdownParser as any).tokenizer;
+if (tokenizer.enable) {
+  tokenizer.enable('table');
+}
+
+const cleanTokens = {
+  ...Object.fromEntries(
+    Object.entries((defaultMarkdownParser as any).tokens).map(([name, spec]: [string, any]) => {
+      const newSpec = { ...spec };
+      if (newSpec.block && typeof newSpec.block !== 'string') newSpec.block = newSpec.block.name;
+      if (newSpec.node && typeof newSpec.node !== 'string') newSpec.node = newSpec.node.name;
+      if (newSpec.mark && typeof newSpec.mark !== 'string') newSpec.mark = newSpec.mark.name;
+      return [name, newSpec];
+    })
+  ),
+  ...tableTokens
+};
+const editorParser = new MarkdownParser(editorSchema, tokenizer, cleanTokens);
 
 class UmlNodeView {
   dom: HTMLElement;
@@ -321,6 +372,7 @@ const ProseMirrorEditor = forwardRef<EditorRef, Props>(({
         buildInputRules(editorSchema),
         highlightPlugin,
         linkPreviewPlugin,
+        tableEditing(),
         typewriterPlugin,
         searchPlugin,
         new Plugin({

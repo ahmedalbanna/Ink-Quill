@@ -166,6 +166,22 @@
 .ProseMirror hr {
   @apply border-t-2 border-minimal-border my-10;
 }
+.ProseMirror table {
+  @apply w-full border-collapse my-8 border-2 border-minimal-border rounded-lg overflow-hidden;
+}
+.ProseMirror th, .ProseMirror td {
+  @apply border border-minimal-border p-3 text-start min-w-[100px] relative;
+  font-size: 14px;
+}
+.ProseMirror th {
+  @apply bg-minimal-sidebar font-bold text-minimal-text border-b-2 border-minimal-border;
+}
+.ProseMirror .selectedCell:after {
+  @apply absolute inset-0 bg-minimal-accent/10 content-[''] pointer-events-none;
+}
+.ProseMirror .column-resize-handle {
+  @apply absolute right-[-2px] top-0 bottom-0 w-[4px] bg-minimal-accent/40 cursor-col-resize z-[10];
+}
 
 .ProseMirror-placeholder:before {
   content: attr(data-placeholder);
