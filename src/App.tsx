@@ -38,7 +38,8 @@ import {
   Save,
   Download,
   ImagePlus,
-  FolderOpen
+  FolderOpen,
+  Layout
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Markdown from 'react-markdown';
@@ -104,6 +105,7 @@ export default function App() {
   const [isFocusMode, setIsFocusMode] = useState(true);
   const [isTypewriterMode, setIsTypewriterMode] = useState(false);
   const [isSuperZen, setIsSuperZen] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
   const [direction, setDirection] = useState<'ltr' | 'rtl'>(() => {
     return (localStorage.getItem('ink-quill-dir') as 'ltr' | 'rtl') || 'ltr';
   });
@@ -557,6 +559,7 @@ export default function App() {
     { icon: Quote, label: 'Quote', action: () => editorRef.current?.handleFormat('quote') },
     { icon: List, label: 'Unordered List', action: () => insertText('- ') },
     { icon: ListOrdered, label: 'Ordered List', action: () => insertText('1. ') },
+    { icon: Layout, label: 'Toggle Preview', action: () => setShowPreview(prev => !prev), active: showPreview },
     { icon: ImageIcon, label: 'Image', action: () => {
       const choice = window.confirm("Click OK to Upload an image, or Cancel to provide a URL.");
       if (choice) {
@@ -1238,10 +1241,11 @@ export default function App() {
         )}
         <div className={cn(
           "flex-1 relative flex flex-col transition-all duration-1000 ease-[cubic-bezier(0.23,1,0.32,1)]",
-          "max-w-4xl mx-auto border-minimal-border",
+          showPreview ? "max-w-7xl" : "max-w-4xl mx-auto",
+          "border-minimal-border",
           !isFocusMode 
             ? "bg-minimal-bg border-s border-e shadow-none" 
-            : "max-w-3xl my-8 mb-32 rounded-2xl bg-[#fdfdfc] border border-minimal-border/50 shadow-[0_30px_90px_-20px_rgba(0,0,0,0.1),0_20px_40px_-25px_rgba(30,41,59,0.15)] ring-1 ring-black/[0.02]"
+            : "my-8 mb-32 rounded-2xl bg-[#fdfdfc] border border-minimal-border/50 shadow-[0_30px_90px_-20px_rgba(0,0,0,0.1),0_20px_40px_-25px_rgba(30,41,59,0.15)] ring-1 ring-black/[0.02]"
         )}>
           {/* Find and Replace Bar */}
           <AnimatePresence>
@@ -1341,38 +1345,81 @@ export default function App() {
             )}
           </AnimatePresence>
 
-          <ProseMirrorEditor
-            ref={editorRef}
-            value={markdown}
-            onChange={setMarkdown}
-            onKeyDown={handleKeyDown}
-            isTypewriter={isTypewriterMode}
-            direction={direction}
-            aiPersonalInstructions={aiPersonalInstructions}
-            selectedModel={selectedModel}
-            onAiResult={(result) => {
-              setAiResult(result);
-              setShowAiAssistant(true);
-            }}
-            onAiStream={(chunk) => {
-              setAiResult(prev => (prev || '') + chunk);
-              setShowAiAssistant(true);
-            }}
-            onImageUploadRequest={() => {
-              const choice = window.confirm("Click OK to Upload an image, or Cancel to provide a URL.");
-              if (choice) {
-                fileInputRef.current?.click();
-              } else {
-                const url = window.prompt("Enter Image URL:");
-                if (url) {
-                  editorRef.current?.insertImage(url, "Image Alternative Text");
-                }
-              }
-            }}
-            searchQuery={showSearch ? findText : ''}
-            searchOptions={{ isCaseSensitive, isWholeWord, searchIndex, currentMatchIndex }}
-            className="flex-1 overflow-y-auto"
-          />
+          {/* Main Toolbar */}
+          <div className="px-6 py-2 border-b border-minimal-border bg-white/50 backdrop-blur-sm flex items-center gap-1 overflow-x-auto custom-scrollbar no-scrollbar">
+            {toolbarButtons.map((btn, i) => (
+              <button
+                key={i}
+                onClick={btn.action}
+                className={cn(
+                  "p-2 rounded-lg transition-all duration-200 group relative",
+                  btn.active 
+                    ? "bg-minimal-accent text-white shadow-md" 
+                    : "hover:bg-minimal-border text-minimal-muted hover:text-minimal-text"
+                )}
+                title={btn.label}
+              >
+                <btn.icon className="w-4 h-4" />
+                <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-zinc-900 text-white text-[10px] font-bold rounded opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-[100]">
+                  {btn.label}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          <div className={cn("flex flex-1 min-h-0", showPreview && "flex-row")}>
+            <div className={cn("flex flex-col flex-1 min-w-0 transition-all duration-500", showPreview && "border-e border-minimal-border/30")}>
+              <ProseMirrorEditor
+                ref={editorRef}
+                value={markdown}
+                onChange={setMarkdown}
+                onKeyDown={handleKeyDown}
+                isTypewriter={isTypewriterMode}
+                direction={direction}
+                aiPersonalInstructions={aiPersonalInstructions}
+                selectedModel={selectedModel}
+                onAiResult={(result) => {
+                  setAiResult(result);
+                  setShowAiAssistant(true);
+                }}
+                onAiStream={(chunk) => {
+                  setAiResult(prev => (prev || '') + chunk);
+                  setShowAiAssistant(true);
+                }}
+                onImageUploadRequest={() => {
+                  const choice = window.confirm("Click OK to Upload an image, or Cancel to provide a URL.");
+                  if (choice) {
+                    fileInputRef.current?.click();
+                  } else {
+                    const url = window.prompt("Enter Image URL:");
+                    if (url) {
+                      editorRef.current?.insertImage(url, "Image Alternative Text");
+                    }
+                  }
+                }}
+                searchQuery={showSearch ? findText : ''}
+                searchOptions={{ isCaseSensitive, isWholeWord, searchIndex, currentMatchIndex }}
+                className="flex-1 overflow-y-auto"
+              />
+            </div>
+            {showPreview && (
+              <motion.div 
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                className="flex-1 overflow-y-auto p-8 md:p-12 bg-white/50 backdrop-blur-sm min-w-0"
+              >
+                <div className="max-w-prose mx-auto">
+                  <header className="mb-8 pb-4 border-b border-minimal-border/20 flex justify-between items-center">
+                    <span className="text-[10px] font-bold text-minimal-muted uppercase tracking-[0.2em]">Live Preview</span>
+                    <span className="text-[9px] font-mono text-minimal-muted opacity-40">AUTO-RENDERING</span>
+                  </header>
+                  <div className="prose prose-sm md:prose-base max-w-none prose-headings:text-minimal-text prose-headings:font-bold prose-p:text-minimal-text/80 prose-p:leading-relaxed prose-pre:bg-zinc-900 prose-pre:rounded-xl prose-img:rounded-xl">
+                    <Markdown>{markdown}</Markdown>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </div>
         </div>
       </main>
 
